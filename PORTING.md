@@ -186,6 +186,34 @@ cd explorer/electrs && source ../env.sh && cargo build --features sequentia
 # REST: curl 127.0.0.1:3003/blocks/tip/height ; /block/<hash> ; /tx/<txid>
 ```
 
+## Parent-chain mode (Sequentia testnet <-> Bitcoin testnet4)
+
+The explorer toggles between Sequentia and its anchor parent, Bitcoin testnet4,
+via esplora's network switcher. Two of everything, cross-linked:
+
+| | backend | frontend | accent |
+|---|---|---|---|
+| Sequentia testnet | electrs `--features sequentia` -> chain=test node, REST :3003 | `:5001` (`run-sequentia-explorer.sh`) | violet `#7d3fa5` |
+| Bitcoin testnet4 (parent) | plain Bitcoin electrs `--network testnet4 --jsonrpc-import` -> bitcoind :48332, REST :3004 | `:5002` (`run-testnet4-explorer.sh`) | Bitcoin orange `#f7931a` |
+
+- The Bitcoin electrs is a **separate binary** (no `liquid`/`sequentia` feature);
+  build it with `cargo build` then stash it (it shares `target/debug/electrs`
+  with the sequentia build, so `cp` it aside and rebuild `--features sequentia`).
+  Use `--jsonrpc-import` — Bitcoin Core 28 XOR-obfuscates `blk*.dat` (`blocks/xor.dat`),
+  which the blk-file parser can't read.
+- Both esplora instances share `MENU_ITEMS` (the `{name: url}` cross-link map);
+  `MENU_ACTIVE` differs. The switcher is restyled (see below) as an "anchor link".
+
+### Visual identity (frontend-design)
+
+Grounded in Sequentia's own brand palette (from the app icon): violet `#7d3fa5`
++ periwinkle `#6c8add`, against Bitcoin orange `#f7931a` for the parent. The
+**accent encodes the chain** — switching networks recolors the chrome. The
+**network switcher is the signature element**, restyled as a parent/child anchor
+link (each chain shown in its own brand color, an ⚓ on the Sequentia option).
+Lives in `flavors/sequentia-testnet/extras.css` (+ `parent-accent.css` for the
+orange override) and `www/img/icons/SequentiaTestnet-menu-logo.svg`.
+
 ## Running (target)
 
 1. Run a Sequentia `chain=test` node (see `contrib/sequentia/bootstrap-autonomous-testnet.py --chain test`).
