@@ -1,0 +1,15 @@
+[package]
+name = "anchor-decode-check"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone validator: decode a REAL Sequentia block header with the patched
+# rust-elements (sequentia feature) and confirm the parsed anchor + computed
+# block hash match what elementsd reports. Proves the Phase 2 header port.
+[dependencies]
+elements = { path = "../rust-elements", features = ["sequentia"] }
+
+[[bin]]
+name = "anchor-decode-check"
+path = "src/main.rs"

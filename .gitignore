@@ -1,0 +1,7 @@
+# Build artifacts and dependencies — never committed; rebuild locally with
+# `cargo build` (Rust) and `npm install` (esplora). Source only is tracked.
+target/
+node_modules/
+
+# Local logs / scratch
+*.log
