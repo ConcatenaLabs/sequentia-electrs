@@ -206,13 +206,23 @@ via esplora's network switcher. Two of everything, cross-linked:
 
 ### Visual identity (frontend-design)
 
-Grounded in Sequentia's own brand palette (from the app icon): violet `#7d3fa5`
-+ periwinkle `#6c8add`, against Bitcoin orange `#f7931a` for the parent. The
-**accent encodes the chain** — switching networks recolors the chrome. The
-**network switcher is the signature element**, restyled as a parent/child anchor
-link (each chain shown in its own brand color, an ⚓ on the Sequentia option).
-Lives in `flavors/sequentia-testnet/extras.css` (+ `parent-accent.css` for the
-orange override) and `www/img/icons/SequentiaTestnet-menu-logo.svg`.
+Grounded in the **official brand assets**: Sequentia's mark is an amber "S" on a
+near-black disc and Concatena Labs' wordmark is the same amber, so the palette is
+amber-gold `#f5b301` on dark `#141416`, against Bitcoin orange `#f7931a` for the
+parent. The **accent encodes the chain** — switching networks recolors the
+chrome. The **network switcher is the signature element**: a dark, parent/child
+"anchor link" (each chain in its own brand color, ⚓ on the Sequentia option),
+styled dark so the amber/orange accents stay legible.
+
+Official logos (fetched from concatenalabs.com / sequentia.io):
+- `www/img/icons/concatena-labs.png` — Concatena Labs navbar wordmark (on a dark
+  brand chip, since the wordmark's "LABS" is white). Referenced from `navbar.js`.
+- `www/img/icons/SequentiaTestnet-menu-logo.svg` — the official Sequentia S-mark
+  (embedded PNG) for the switcher; `BitcoinTestnet4-menu-logo.svg` for the parent.
+
+CSS in `flavors/sequentia-testnet/extras.css` (+ `parent-accent.css` for the
+Bitcoin-orange override on the testnet4 view). (`logo.svg` is the now-unused
+earlier recreation.)
 
 ## Running (target)
 
