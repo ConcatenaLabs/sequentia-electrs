@@ -291,7 +291,9 @@ impl Query {
         sorting: AssetSorting,
     ) -> Result<(usize, Vec<LiquidAsset>)> {
         let asset_db = match &self.asset_db {
-            None => return Ok((0, vec![])),
+            // SEQUENTIA: no curated asset registry — list the chain's on-chain
+            // issued assets instead, so the Assets page reflects real issuances.
+            None => return self.list_issued_assets(start_index, limit),
             Some(db) => db.read().unwrap(),
         };
         let (total_num, results) = asset_db.list(start_index, limit, sorting);
@@ -303,6 +305,41 @@ impl Query {
                     .chain_err(|| "missing registered asset")?)
             })
             .collect::<Result<Vec<_>>>()?;
+        Ok((total_num, results))
+    }
+
+    // SEQUENTIA: enumerate every on-chain issued asset by scanning the issuance
+    // index (history_db rows keyed b"i" + asset_id). Used when no registry DB is
+    // configured. Sorted by asset id for stable pagination; the native/policy
+    // asset is included (it is itself a genesis issuance).
+    #[cfg(feature = "liquid")]
+    fn list_issued_assets(
+        &self,
+        start_index: usize,
+        limit: usize,
+    ) -> Result<(usize, Vec<LiquidAsset>)> {
+        let mut asset_ids: Vec<AssetId> = self
+            .chain()
+            .store()
+            .history_db()
+            .iter_scan(b"i")
+            .filter_map(|row| {
+                if row.key.len() == 33 && row.key[0] == b'i' {
+                    AssetId::from_slice(&row.key[1..33]).ok()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        asset_ids.sort();
+        asset_ids.dedup();
+        let total_num = asset_ids.len();
+        let results = asset_ids
+            .into_iter()
+            .skip(start_index)
+            .take(limit)
+            .filter_map(|asset_id| self.lookup_asset(&asset_id).ok().flatten())
+            .collect();
         Ok((total_num, results))
     }
 }
