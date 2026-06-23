@@ -64,6 +64,25 @@ pub struct TxOverview {
     value: u64,
     #[cfg(feature = "liquid")]
     discount_vsize: u64,
+    // SEQUENTIA: an any-asset chain can't be summarized by a single native value.
+    // Expose the per-asset explicit output totals, whether any output is blinded,
+    // and the asset the fee was actually paid in (fees may be paid in any asset,
+    // not just the native one). This lets the frontend render real amounts instead
+    // of a blanket "Confidential" and a native-only sat/vB fee rate.
+    #[cfg(feature = "liquid")]
+    out_values: Vec<AssetValue>,
+    #[cfg(feature = "liquid")]
+    confidential: bool,
+    #[cfg(feature = "liquid")]
+    fee_asset: Option<AssetId>,
+}
+
+// SEQUENTIA: a single asset's summed explicit output value within a transaction.
+#[cfg(feature = "liquid")]
+#[derive(Serialize)]
+pub struct AssetValue {
+    pub asset: AssetId,
+    pub value: u64,
 }
 
 impl Mempool {
@@ -363,10 +382,49 @@ impl Mempool {
             // Get feeinfo for caching and recent tx overview
             let feeinfo = TxFeeInfo::new(&tx, &prevouts, self.config.network_type);
 
+            // SEQUENTIA: summarize the tx for the recent-tx list. On the any-asset
+            // chain each output is either explicit or blinded, and the fee may be
+            // paid in any asset, so walk the outputs once to collect the per-asset
+            // explicit output totals, the blinded flag, and the real fee asset/amount.
+            #[cfg(feature = "liquid")]
+            let (out_values, confidential, fee_asset, fee_amount) = {
+                let mut totals: HashMap<AssetId, u64> = HashMap::new();
+                let mut confidential = false;
+                let mut fee_asset: Option<AssetId> = None;
+                let mut fee_amount: u64 = 0;
+                for txout in &tx.output {
+                    if txout.is_fee() {
+                        // Fee outputs are always explicit in Elements.
+                        if let (Some(a), Some(v)) =
+                            (txout.asset.explicit(), txout.value.explicit())
+                        {
+                            fee_asset.get_or_insert(a);
+                            fee_amount += v;
+                        }
+                        continue;
+                    }
+                    match (txout.asset.explicit(), txout.value.explicit()) {
+                        (Some(a), Some(v)) => *totals.entry(a).or_insert(0) += v,
+                        _ => confidential = true,
+                    }
+                }
+                let mut out_values: Vec<AssetValue> = totals
+                    .into_iter()
+                    .map(|(asset, value)| AssetValue { asset, value })
+                    .collect();
+                // Largest raw value first as a stable "primary" (cross-asset value
+                // isn't truly comparable without prices, but this is deterministic).
+                out_values.sort_unstable_by(|a, b| b.value.cmp(&a.value));
+                (out_values, confidential, fee_asset, fee_amount)
+            };
+
             // recent is an ArrayDeque that automatically evicts the oldest elements
             self.recent.push_front(TxOverview {
                 txid,
+                #[cfg(not(feature = "liquid"))]
                 fee: feeinfo.fee,
+                #[cfg(feature = "liquid")]
+                fee: fee_amount,
                 vsize: feeinfo.vsize,
                 #[cfg(not(feature = "liquid"))]
                 value: prevouts
@@ -375,6 +433,12 @@ impl Mempool {
                     .sum(),
                 #[cfg(feature = "liquid")]
                 discount_vsize: tx.discount_vsize() as u64,
+                #[cfg(feature = "liquid")]
+                out_values,
+                #[cfg(feature = "liquid")]
+                confidential,
+                #[cfg(feature = "liquid")]
+                fee_asset,
             });
 
             self.feeinfo.insert(txid, feeinfo);
