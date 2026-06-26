@@ -75,6 +75,12 @@ impl Query {
         self.daemon.get_checkpoint_info()
     }
 
+    // SEQUENTIA: tip anchor status passthrough (getanchorstatus).
+    #[cfg(feature = "sequentia")]
+    pub fn get_anchor_status(&self) -> Result<serde_json::Value> {
+        self.daemon.get_anchor_status()
+    }
+
     #[trace]
     pub fn broadcast_raw(&self, txhex: &str) -> Result<Txid> {
         let txid = self.daemon.broadcast_raw(txhex)?;

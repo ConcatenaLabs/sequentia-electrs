@@ -880,6 +880,12 @@ fn handle_request(
         (&Method::GET, Some(&"sequentia"), Some(&"checkpoints"), None, None, None) => {
             json_response(query.get_checkpoint_info()?, TTL_SHORT)
         }
+        // SEQUENTIA: tip anchor status (getanchorstatus passthrough) — the cross-chain
+        // swap reveal gate reads anchorheight + anchorstatus from here. Volatile -> TTL_SHORT.
+        #[cfg(feature = "sequentia")]
+        (&Method::GET, Some(&"sequentia"), Some(&"anchorstatus"), None, None, None) => {
+            json_response(query.get_anchor_status()?, TTL_SHORT)
+        }
 
         (&Method::GET, Some(&"blocks"), start_height, None, None, None) => {
             let start_height = start_height.and_then(|height| height.parse::<usize>().ok());

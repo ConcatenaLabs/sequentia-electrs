@@ -901,6 +901,14 @@ impl Daemon {
         self.request("getcheckpointinfo", json!([]))
     }
 
+    // SEQUENTIA: tip anchor status (getanchorstatus RPC) — the live parent-chain
+    // anchor check a cross-chain-swap claimant needs (anchorheight + status). Goes
+    // through electrs because the node RPC needs the cookie/auth electrs already holds.
+    #[cfg(feature = "sequentia")]
+    pub fn get_anchor_status(&self) -> Result<Value> {
+        self.request("getanchorstatus", json!([]))
+    }
+
     #[trace]
     pub fn broadcast_raw(&self, txhex: &str) -> Result<Txid> {
         let txid = self.request("sendrawtransaction", json!([txhex]))?;
