@@ -113,21 +113,28 @@ rust-elements 0.26.1 misparses Sequentia data:
   - Block JSON gains `bitcoin_anchor: {height, hash}` (parsed from the
     header; a Bitcoin testnet4 block on the public testnet).
   - Block JSON gains `pos_certificate`, decoded from the block's proof
-    `solution` when it is a legacy embedded-member BLS certificate:
-    `leader_sig`, `agg_sig(96)`, then one 258-byte record per member
-    (`secp_pubkey(33) + vrf_proof(81) + bls_pubkey(48) + bls_pop(96)`).
-    Solutions that are not this shape (genesis, escaping-stall blocks, and
-    all blocks on the current public-committee chain, which carry only the
-    leader and aggregate signatures) yield no `pos_certificate` field.
-  - Block JSON declares a `finalized` field, currently never set: `/block`
-    is served purely from the index with no per-request daemon RPC (so it
-    keeps working when the node blips); finality is served by
+    `solution`. Both certificate encodings are decoded (node `src/pos.h`):
+    the bitfield form used by the current public-committee chain
+    (`leader_sig`, `agg_sig(96)`, `signer_bitfield` - bit `i`, LSB-first
+    within each byte, set means committee member `i` signed - with
+    `signer_count` as its popcount), and the legacy embedded-member form
+    (`leader_sig`, `agg_sig(96)`, then one 258-byte record per member:
+    `secp_pubkey(33) + vrf_proof(81) + bls_pubkey(48) + bls_pop(96)`,
+    exposed as `members` with `signer_count` = the member count).
+    Solutions that are neither shape (genesis, escaping-stall blocks)
+    yield no `pos_certificate` field.
+  - Block JSON declares a `finalized` field, deliberately never set:
+    `/block` is served purely from the index with no per-request daemon RPC
+    (so it keeps working when the node blips); finality is served by
     `GET /sequentia/checkpoints` instead.
   - New routes `GET /sequentia/checkpoints` and `GET /sequentia/anchorstatus`
     (the RPC passthroughs above).
   - Unit tests (`sequentia_cert_tests`) for the certificate parser:
     synthetic 1/3/51/100-member certificates with every field offset
-    asserted, plus rejection of leader-only and 64-byte-MuSig2 solutions.
+    asserted, a synthetic bitfield certificate, a real bitfield-certified
+    block captured from the live public testnet
+    (`tests/fixtures/sequentia-testnet-block-7454.bin`), plus rejection of
+    leader-only and 64-byte-MuSig2 solutions.
 
 See the README's "REST API" section for the integrator-facing view of these
 endpoints with live examples.

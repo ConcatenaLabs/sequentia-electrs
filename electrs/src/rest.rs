@@ -103,7 +103,9 @@ struct BlockValue {
     pos_certificate: Option<PosCertificate>,
 
     // SEQUENTIA: whether this block is checkpoint-finalized (height <=
-    // getcheckpointinfo.finalized_height). Set by the /block handler.
+    // getcheckpointinfo.finalized_height). Deliberately never set: /block is
+    // served purely from the index with no per-request daemon RPC (see the
+    // handler note), so finality lives at /sequentia/checkpoints instead.
     #[cfg(feature = "sequentia")]
     #[serde(skip_serializing_if = "Option::is_none")]
     finalized: Option<bool>,
@@ -130,16 +132,34 @@ struct PosCommitteeMember {
 }
 
 // SEQUENTIA: the BLS committee certificate decoded from a block's proof solution.
-// Layout (src/pos.h BuildPosBlsSolution):
-//   <leader_sig> <agg_sig(96)> <member_1(257)> ... <member_m(257)>
+// Two encodings (node src/pos.h; doc/sequentia/04-proof-of-stake.md §4):
+//   bitfield (public fixed-size committee — the current chain,
+//   BuildPosBlsBitfieldSolution):
+//     <leader_sig> <agg_sig(96)> <bitfield(≤⌈K/8⌉, trailing zero bytes trimmed)>
+//   full-member (legacy sortitioned committees, BuildPosBlsSolution):
+//     <leader_sig> <agg_sig(96)> <member_1(258)> ... <member_m(258)>
 #[cfg(feature = "sequentia")]
 #[derive(Serialize, Deserialize)]
 struct PosCertificate {
     leader_sig: String,
     agg_sig: String,
-    member_count: usize,
-    members: Vec<PosCommitteeMember>,
+    // how many committee members signed: the bitfield popcount, or the number
+    // of embedded members in the full-member form.
+    signer_count: usize,
+    // bitfield form only: hex signer bitfield, bit i (LSB-first within each
+    // byte) set == registered public-committee member i signed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signer_bitfield: Option<String>,
+    // full-member form only: the embedded signing members.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    members: Option<Vec<PosCommitteeMember>>,
 }
+
+// The signer bitfield covers at most MAX_POS_PUBLIC_COMMITTEE_SIZE = 1000
+// seats (node src/pos.h), i.e. 125 bytes — well below a 258-byte member push,
+// so the two certificate forms cannot be confused.
+#[cfg(feature = "sequentia")]
+const POS_MAX_BITFIELD_BYTES: usize = (1000 + 7) / 8;
 
 #[cfg(feature = "sequentia")]
 fn parse_pos_bls_certificate(solution: &Script) -> Option<PosCertificate> {
@@ -154,10 +174,23 @@ fn parse_pos_bls_certificate(solution: &Script) -> Option<PosCertificate> {
             _ => return None,
         }
     }
-    // BLS cert: leader_sig, 96-byte aggregate, then ≥1 member of 257 bytes each.
-    if pushes.len() < 3 || pushes[1].len() != 96 {
+    // Both forms open with <leader_sig> <agg_sig(96)> and carry ≥1 more push.
+    if pushes.len() < 3 || pushes[0].is_empty() || pushes[1].len() != 96 {
         return None;
     }
+    let leader_sig = pushes[0].to_lower_hex_string();
+    let agg_sig = pushes[1].to_lower_hex_string();
+    // Bitfield form: exactly three pushes, the third being the signer bitfield.
+    if pushes.len() == 3 && !pushes[2].is_empty() && pushes[2].len() <= POS_MAX_BITFIELD_BYTES {
+        return Some(PosCertificate {
+            leader_sig,
+            agg_sig,
+            signer_count: pushes[2].iter().map(|b| b.count_ones() as usize).sum(),
+            signer_bitfield: Some(pushes[2].to_lower_hex_string()),
+            members: None,
+        });
+    }
+    // Full-member form: every remaining push is one 258-byte member.
     let members = pushes[2..]
         .iter()
         .map(|m| {
@@ -173,10 +206,11 @@ fn parse_pos_bls_certificate(solution: &Script) -> Option<PosCertificate> {
         })
         .collect::<Option<Vec<_>>>()?;
     Some(PosCertificate {
-        leader_sig: pushes[0].to_lower_hex_string(),
-        agg_sig: pushes[1].to_lower_hex_string(),
-        member_count: members.len(),
-        members,
+        leader_sig,
+        agg_sig,
+        signer_count: members.len(),
+        signer_bitfield: None,
+        members: Some(members),
     })
 }
 
@@ -185,10 +219,10 @@ mod sequentia_cert_tests {
     use super::*;
     use elements::script::Builder;
 
-    // Build a synthetic BLS-cert solution with `n` committee members, then assert
-    // parse_pos_bls_certificate splits every field at the right offset. This is
-    // the deterministic analogue of the live 1-member validation, exercising N>1
-    // (the live testnet only has the escaping-stall block available right now).
+    // Build a synthetic full-member BLS-cert solution with `n` committee members,
+    // then assert parse_pos_bls_certificate splits every field at the right
+    // offset. The current public testnet uses the bitfield form instead (see
+    // parses_live_testnet_bitfield_block); this keeps the legacy form covered.
     fn synth_member(seed: u8) -> Vec<u8> {
         let mut m = Vec::with_capacity(258);
         m.extend(std::iter::repeat(seed).take(33)); // secp_pubkey
@@ -213,10 +247,12 @@ mod sequentia_cert_tests {
 
             let cert = parse_pos_bls_certificate(&solution)
                 .unwrap_or_else(|| panic!("n={}: expected a cert", n));
-            assert_eq!(cert.member_count, n, "n={n} member_count");
+            assert_eq!(cert.signer_count, n, "n={n} signer_count");
             assert_eq!(cert.leader_sig, leader_sig.to_lower_hex_string());
             assert_eq!(cert.agg_sig, agg_sig.to_lower_hex_string());
-            for (i, m) in cert.members.iter().enumerate() {
+            assert!(cert.signer_bitfield.is_none(), "n={n} full-member cert has no bitfield");
+            let cert_members = cert.members.as_ref().expect("full-member cert has members");
+            for (i, m) in cert_members.iter().enumerate() {
                 let raw = &members[i];
                 assert_eq!(m.secp_pubkey, raw[0..33].to_lower_hex_string(), "n={n} m={i} secp");
                 assert_eq!(m.vrf_proof, raw[33..114].to_lower_hex_string(), "n={n} m={i} vrf");
@@ -224,6 +260,61 @@ mod sequentia_cert_tests {
                 assert_eq!(m.bls_pop, raw[162..258].to_lower_hex_string(), "n={n} m={i} blspop");
             }
         }
+    }
+
+    #[test]
+    fn parses_bitfield_certificate() {
+        // <leader_sig> <agg_sig(96)> <bitfield>: bit i (LSB-first) = signer i.
+        let leader_sig = vec![0xABu8; 70];
+        let agg_sig = vec![0xCDu8; 96];
+        let bitfield = vec![0b0001_0011u8, 0x00, 0x80]; // signers 0, 1, 4, 23
+        let solution = Builder::new()
+            .push_slice(&leader_sig)
+            .push_slice(&agg_sig)
+            .push_slice(&bitfield)
+            .into_script();
+
+        let cert = parse_pos_bls_certificate(&solution).expect("expected a bitfield cert");
+        assert_eq!(cert.leader_sig, leader_sig.to_lower_hex_string());
+        assert_eq!(cert.agg_sig, agg_sig.to_lower_hex_string());
+        assert_eq!(cert.signer_count, 4);
+        assert_eq!(cert.signer_bitfield.as_deref(), Some("130080"));
+        assert!(cert.members.is_none(), "bitfield cert embeds no members");
+
+        // A 258-byte third push is a member, not an (oversized) bitfield.
+        let one_member = Builder::new()
+            .push_slice(&leader_sig)
+            .push_slice(&agg_sig)
+            .push_slice(&synth_member(0x11))
+            .into_script();
+        let cert = parse_pos_bls_certificate(&one_member).expect("expected a 1-member cert");
+        assert!(cert.signer_bitfield.is_none());
+        assert_eq!(cert.members.map(|m| m.len()), Some(1));
+    }
+
+    // A real block captured from the live public testnet REST API
+    // (GET /api/block/<hash>/raw, height 7454, 2026-07-08): the re-genesis
+    // chain's public BLS committee certifies blocks in the bitfield form.
+    #[test]
+    fn parses_live_testnet_bitfield_block() {
+        let raw = include_bytes!("../tests/fixtures/sequentia-testnet-block-7454.bin");
+        let block: elements::Block = elements::encode::deserialize(raw).expect("decode block");
+        assert_eq!(
+            block.block_hash().to_string(),
+            "75443b2b17b00ad6189cd9d88e5b20d14e8cb00b7bdb69a0ce89c2cf68fb1221"
+        );
+        let solution = match &block.header.ext {
+            elements::BlockExtData::Proof { solution, .. } => solution,
+            _ => panic!("expected a Proof header"),
+        };
+        let cert = parse_pos_bls_certificate(solution).expect("expected a bitfield cert");
+        assert_eq!(cert.leader_sig.len(), 70 * 2, "70-byte DER leader signature");
+        assert_eq!(cert.agg_sig.len(), 96 * 2, "96-byte BLS aggregate");
+        // Seats 0, 1, 3, 4, 5 and 7 signed; the producer trims trailing zero
+        // bytes, so the bitfield is 1 byte even on the 20-seat committee.
+        assert_eq!(cert.signer_bitfield.as_deref(), Some("bb"));
+        assert_eq!(cert.signer_count, 6);
+        assert!(cert.members.is_none());
     }
 
     #[test]

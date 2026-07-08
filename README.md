@@ -61,13 +61,9 @@ Known limitations:
 
 - Upstream electrs panics if a block it is fetching is reorged away;
   `run-electrs-supervised.sh` exists to restart it (see "Running").
-- The `pos_certificate` block field only appears for the legacy block-solution
-  format that embeds committee member records. On the current public testnet
-  (re-genesis of 2026-07-05, public committee selection) block solutions carry
-  only the leader and aggregate BLS signatures, so the field is omitted.
-- The `finalized` block field is declared in the code but currently never set
-  (the `/block` handler serves purely from the index and makes no RPC call);
-  use `GET /sequentia/checkpoints` for finality.
+- The `finalized` block field is declared in the code but deliberately never
+  set (the `/block` handler serves purely from the index and makes no RPC
+  call); use `GET /sequentia/checkpoints` for finality.
 - The `SEQUENTIA_TESTNET_GENESIS` constant in `electrs/src/chain.rs` still
   holds the pre-2026-07-05 genesis hash. It is only used for Electrum server
   discovery, so indexing and the REST API are unaffected, but the constant is
@@ -210,11 +206,15 @@ $ curl https://sequentiatestnet.com/api/block/<hash>
 }
 ```
 
-Block objects can also carry `pos_certificate` (a decoded proof-of-stake BLS
-committee certificate with `leader_sig`, `agg_sig`, `member_count` and per
-member `secp_pubkey`/`vrf_proof`/`bls_pubkey`/`bls_pop`). This only appears
-for the legacy solution format that embeds member records; current public
-testnet blocks omit it (see "Status").
+Block objects can also carry `pos_certificate`, the decoded proof-of-stake
+BLS committee certificate: `leader_sig`, `agg_sig`, `signer_count`, plus one
+of two form-specific fields. Blocks on the current public testnet (bitfield
+form, public fixed-size committee) carry `signer_bitfield` - a hex bitfield
+in the registered committee's order, bit `i` (LSB-first within each byte) set
+meaning "committee member `i` signed"; `signer_count` is its popcount.
+Legacy blocks whose solution embeds member records instead carry `members`
+(per member `secp_pubkey`/`vrf_proof`/`bls_pubkey`/`bls_pop`). Solutions
+that are neither (genesis, escaping-stall blocks) omit the field.
 
 ### `GET /sequentia/checkpoints`
 
