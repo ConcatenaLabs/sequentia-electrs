@@ -1,5 +1,12 @@
 # Esplora - Electrs backend API
 
+> **Sequentia note:** this directory is the Sequentia fork of Blockstream
+> electrs. For Sequentia-specific build/run instructions see the repo-root
+> [README](../README.md), and for the exact list of changes vs upstream see
+> [SEQUENTIA-CHANGES.md](../SEQUENTIA-CHANGES.md). The upstream documentation
+> below is kept as-is and its clone/checkout instructions refer to upstream,
+> not to this fork.
+
 A block chain index engine and HTTP API written in Rust based on [romanz/electrs](https://github.com/romanz/electrs).
 
 Used as the backend for the [Esplora block explorer](https://github.com/Blockstream/esplora) powering [blockstream.info](https://blockstream.info/).
