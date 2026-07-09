@@ -162,9 +162,9 @@ pub fn liquid_genesis_hash(network: Network) -> elements::BlockHash {
             "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003"
                 .parse()
                 .unwrap();
-        // SEQUENTIA chain=test genesis (src/chainparams.cpp CTestNetParams).
+        // SEQUENTIA chain=test genesis (src/chainparams.cpp CTestNetParams; 2026-07-05 re-genesis).
         static ref SEQUENTIA_TESTNET_GENESIS: BlockHash =
-            "c2a0a99b4c307e8423b98140af1f539aa4e1feec25c62d655d91d8df51c7dfba"
+            "ddd11d54c87a2bd94400fd31ce05d8e1110bb4b78e7103f738342086fc4ea92e"
                 .parse()
                 .unwrap();
     }
