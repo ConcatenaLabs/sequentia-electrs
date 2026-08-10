@@ -1,54 +1,84 @@
 # sequentia-electrs
 
 Sequentia's fork of [Blockstream electrs](https://github.com/Blockstream/electrs): the Rust
-indexer that serves the Esplora REST API, both for the Sequentia sidechain and for its Bitcoin
-testnet4 parent chain.
+indexer that serves the Esplora REST API (and an Electrum RPC server) for the Sequentia sidechain
+and its Bitcoin testnet4 parent chain. It backs the live block explorer and public API.
 
 This repository was split out of
 [`sequentia-explorer`](https://github.com/GracedEternalKingCabbageMan/sequentia-explorer), which
-now holds only the Esplora frontend. The frontend talks to this indexer over HTTP; there is no
+now holds only the frontend. The frontend consumes this indexer's REST API over HTTP; there is no
 build-time coupling between the two.
 
-Node and consensus conventions live in the
+`SEQUENTIA-CHANGES.md` is the authoritative, file-level list of what this fork changes versus both
+upstreams. Read it before touching the decoder. Node and consensus conventions live in the
 [`Sequentia`](https://github.com/GracedEternalKingCabbageMan/Sequentia) repo.
 
 ## Layout, and why it matters
 
 | Path | What |
 |---|---|
-| `electrs/` | The indexer and Esplora REST API. Sequentia chain params live in `electrs/src/chain.rs`. |
-| `rust-elements/` | A vendored fork of the `elements` crate with a `sequentia` feature that parses the 36-byte Bitcoin anchor in Sequentia block headers. This is where the core block and transaction decoder work lives. |
-| `anchor-decode-check/` | A small utility that decodes a header's anchor through `rust-elements` and checks the parse. |
-| `PORTING.md` | The full porting guide: anchor decoding, chain params, and the complete build and run matrix. |
+| `electrs/` | The indexer and Esplora REST API. Sequentia chain params live in `electrs/src/chain.rs`. Upstream docs stay here (`electrs/README.md`, `electrs/doc/`). |
+| `rust-elements/` | A vendored fork of the `elements` crate with a `sequentia` cargo feature. This is where the two serialization deltas are handled. |
+| `anchor-decode-check/` | A standalone validator: decodes a captured header through `rust-elements` and asserts the parsed anchor and recomputed block hash match what the node reported. Also holds `blockdiag`, for locating misalignments. |
+| `SEQUENTIA-CHANGES.md` | The precise diff against upstream, with file pointers. |
 
-`electrs/` and `anchor-decode-check/` depend on `rust-elements` through a
-`path = "../rust-elements"` Cargo dependency, so **the three directories must stay siblings at the
-repo root.** Moving or nesting one breaks both builds.
+`electrs/` and `anchor-decode-check/` reach `rust-elements` through a `path = "../rust-elements"`
+Cargo patch, so **the three directories must stay siblings at the repo root.**
+
+## The two serialization deltas
+
+Everything Sequentia-specific is gated behind the `sequentia` cargo feature in both crates, so a
+featureless build stays plain Bitcoin electrs. The fork exists for exactly two wire-format
+differences, and both are silent-corruption failures rather than clean errors:
+
+1. **A 36-byte Bitcoin anchor in the block header**, inserted between the Elements `height` field
+   and the signed-block proof. The block hash commits to it (while still excluding the proof
+   solution, as Elements already does). Get this wrong and every computed block hash is wrong.
+2. **An extra denomination byte in `CAssetIssuance`**, present whenever an input carries an
+   issuance — including the genesis policy-asset issuance, where stock rust-elements loses byte
+   alignment.
+
+Encode, decode and hash must agree byte for byte with the node. Change one and you must change all
+three.
 
 ## Build
 
+Prerequisites: Rust, plus `clang` and `cmake` — the bundled RocksDB is compiled from source and its
+bindings are generated with libclang. `env.sh` exists only for hosts where libclang cannot be
+installed system-wide; with a system clang you do not need it.
+
 ```sh
-cd electrs && source ../env.sh
-cargo build --features sequentia      # the Sequentia indexer
-cargo build                           # plain Bitcoin electrs, for the testnet4 parent chain
+cd electrs
+cargo build --features sequentia      # Sequentia indexer
+cargo build                           # plain Bitcoin indexer, for the testnet4 parent chain
 ```
 
-The two indexers are the **same crate built with different features**: the parent-chain binary is
-the featureless build. `env.sh` supplies the toolchain environment so electrs can be built without
-system installs. `PORTING.md` has the complete matrix.
+**Both builds write to the same `target/debug/electrs`.** If you need both binaries, copy the first
+aside before building the second — the run scripts assume you have. Add `--release` for production.
 
 There is no CI.
 
 ## Running
 
-- `run-electrs-supervised.sh` runs the Sequentia indexer against the shared testnet and **restarts
-  it across chain reorgs and resets**. This is not defensive padding: upstream Blockstream electrs
-  hard-panics on a reorg of a block it is currently fetching, and Sequentia reorgs whenever Bitcoin
-  reorgs. Do not remove the supervision loop; fix crashes without assuming they can be eliminated.
-- `run-electrs-testnet4.sh` runs the Bitcoin testnet4 parent-chain indexer.
+- `run-electrs-supervised.sh` runs the Sequentia indexer under a restart-on-crash supervisor. That
+  is not defensive padding: upstream electrs panics if a block it is fetching is reorged away, and
+  Sequentia reorgs whenever Bitcoin reorgs. Fix crashes without assuming the supervisor can be
+  removed.
+- `run-electrs-testnet4.sh` runs the Bitcoin testnet4 parent-chain indexer, and expects the plain
+  Bitcoin binary at `$ELECTRS_BTC_BIN`.
 
-The explorer proxies `/api` to the Sequentia indexer and `/testnet4/api` to the parent-chain one,
-and the registry and the web wallet both read the Sequentia one.
+The explorer proxies `/api` to the Sequentia indexer and `/testnet4/api` to the parent-chain one;
+the registry and the web wallet both read the Sequentia one.
+
+## Known sharp edges, already documented
+
+- The `finalized` block field is declared but deliberately never set — the `/block` handler serves
+  purely from the index and makes no RPC call. Use `GET /sequentia/checkpoints` for finality.
+- `SEQUENTIA_TESTNET_GENESIS` in `electrs/src/chain.rs` still holds the pre-2026-07-05 genesis hash.
+  It is used only for Electrum server discovery, so indexing and REST are unaffected, but it is
+  stale relative to the live chain.
+
+Both are recorded in `README.md`'s "Known limitations". If you fix one, update that list.
 
 ## Working in this repo
 
@@ -62,5 +92,5 @@ and the registry and the web wallet both read the Sequentia one.
 - PRs go against `main`, which is the remote default.
 - **Deployment is pull-only.** The server pulls this repo from GitHub and builds there. Never edit
   source on the server and never copy source or binaries onto it.
-- Keep the divergence from upstream electrs small and confined to `rust-elements` plus the chain
-  params, so upstream fixes stay mergeable.
+- Keep the divergence from upstream small and feature-gated, and keep `SEQUENTIA-CHANGES.md`
+  accurate when you add to it, so upstream fixes stay mergeable.
