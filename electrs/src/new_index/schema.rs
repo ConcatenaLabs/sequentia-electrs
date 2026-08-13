@@ -517,7 +517,13 @@ impl Indexer {
     fn _index(&self, blocks: &[BlockEntry]) -> Vec<DBRow> {
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
-            lookup_txos(&self.store.txstore_db, get_previous_txos(blocks)).unwrap()
+            // SEQUENTIA: tolerant lookup. A consensus-special transaction (the
+            // block-89505 treasury UTXO recovery) spends outpoints that never
+            // existed as real transactions, and the strict lookup made the
+            // indexer panic on the whole chain. Missing prevouts are skipped
+            // here and their spending links are not indexed (there is no
+            // funding row to link); queries keep the strict lookup.
+            lookup_txos_tolerant(&self.store.txstore_db, get_previous_txos(blocks))
         };
         let rows = {
             let _timer = self.start_timer("index_process");
@@ -1310,6 +1316,29 @@ fn lookup_txos(txstore_db: &DB, outpoints: BTreeSet<OutPoint>) -> Result<HashMap
         .collect()
 }
 
+// SEQUENTIA: like lookup_txos but missing outpoints are skipped with a warning
+// instead of failing the whole batch. Used ONLY by the indexer (_index): the
+// treasury UTXO-recovery transaction spends phantom outpoints under a
+// consensus special-case, and those have no funding row to link.
+fn lookup_txos_tolerant(txstore_db: &DB, outpoints: BTreeSet<OutPoint>) -> HashMap<OutPoint, TxOut> {
+    let keys = outpoints.iter().map(TxOutRow::key).collect::<Vec<_>>();
+    txstore_db
+        .multi_get(keys)
+        .into_iter()
+        .zip(outpoints)
+        .filter_map(|(res, outpoint)| match res.unwrap() {
+            Some(txo) => Some((outpoint, deserialize(&txo).expect("failed to parse TxOut"))),
+            None => {
+                warn!(
+                    "missing previous txo {} (consensus-special spend); skipping its spending link",
+                    outpoint
+                );
+                None
+            }
+        })
+        .collect()
+}
+
 fn lookup_txo(txstore_db: &DB, outpoint: &OutPoint) -> Option<TxOut> {
     txstore_db
         .get(&TxOutRow::key(&outpoint))
@@ -1392,9 +1421,13 @@ fn index_transaction(
         if !has_prevout(txi) {
             continue;
         }
-        let prev_txo = previous_txos_map
-            .get(&txi.previous_output)
-            .unwrap_or_else(|| panic!("missing previous txo {}", txi.previous_output));
+        // SEQUENTIA: a phantom prevout (consensus-special spend, see
+        // lookup_txos_tolerant) has no funding row; skip its history and
+        // spending-edge rows instead of panicking.
+        let prev_txo = match previous_txos_map.get(&txi.previous_output) {
+            Some(txo) => txo,
+            None => continue,
+        };
 
         let history = TxHistoryRow::new(
             &prev_txo.script_pubkey,
