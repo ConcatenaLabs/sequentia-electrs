@@ -419,7 +419,13 @@ impl TransactionValue {
             .iter()
             .enumerate()
             .map(|(index, txin)| {
-                TxInValue::new(txin, prevouts.get(&(index as u32)).cloned(), config)
+                TxInValue::new(
+                    txin,
+                    prevouts.get(&(index as u32)).cloned(),
+                    config,
+                    #[cfg(feature = "liquid")]
+                    &tx.output,
+                )
             })
             .collect();
         let vouts: Vec<TxOutValue> = tx
@@ -490,7 +496,7 @@ struct TxInValue {
 }
 
 impl TxInValue {
-    fn new(txin: &TxIn, prevout: Option<&TxOut>, config: &Config) -> Self {
+    fn new(txin: &TxIn, prevout: Option<&TxOut>, config: &Config, #[cfg(feature = "liquid")] outputs: &[TxOut]) -> Self {
         let witness = &txin.witness;
         #[cfg(feature = "liquid")]
         let witness = &witness.script_witness;
@@ -532,7 +538,7 @@ impl TxInValue {
             is_pegin: txin.is_pegin,
             #[cfg(feature = "liquid")]
             issuance: if txin.has_issuance() {
-                Some(IssuanceValue::from(txin))
+                Some(IssuanceValue::from_txin(txin, outputs))
             } else {
                 None
             },
