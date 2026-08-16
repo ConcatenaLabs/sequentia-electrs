@@ -6,7 +6,6 @@ pub mod asset;
 pub mod peg;
 mod registry;
 
-use asset::get_issuance_entropy;
 pub use asset::{lookup_asset, LiquidAsset};
 pub use registry::{AssetRegistry, AssetSorting};
 
@@ -29,12 +28,20 @@ pub struct IssuanceValue {
     pub tokenamountcommitment: Option<PedersenCommitment>,
 }
 
-impl From<&TxIn> for IssuanceValue {
-    fn from(txin: &TxIn) -> Self {
+impl IssuanceValue {
+    /// SEQUENTIA: built from the input AND its transaction's outputs.
+    ///
+    /// A supervised issuance commits its freeze descriptor into the asset id,
+    /// and that descriptor lives in a declaration output of this very
+    /// transaction, so the id is only derivable with the outputs in hand.
+    /// Without them this reported an asset that does not exist.
+    pub fn from_txin(txin: &TxIn, outputs: &[elements::TxOut]) -> Self {
         let issuance = &txin.asset_issuance;
         let is_reissuance = issuance.asset_blinding_nonce != ZERO_TWEAK;
 
-        let asset_entropy = get_issuance_entropy(txin).expect("invalid issuance");
+        let asset_entropy =
+            crate::elements::asset::get_issuance_entropy_in_tx(txin, outputs)
+                .expect("invalid issuance");
         let asset_id = AssetId::from_entropy(asset_entropy);
 
         let contract_hash = if !is_reissuance {

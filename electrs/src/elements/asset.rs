@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
-use bitcoin::hashes::{sha256, Hash};
+use bitcoin::hashes::{sha256, sha256d, Hash};
+use std::io::Write;
 use elements::confidential::{Asset, Value};
-use elements::encode::{deserialize, serialize};
+use elements::encode::{deserialize, serialize, Encodable};
 use elements::secp256k1_zkp::ZERO_TWEAK;
 use elements::{issuance::ContractHash, AssetId, AssetIssuance, OutPoint, Transaction, TxIn};
 
@@ -289,7 +290,8 @@ fn index_tx_assets(
         } else if txi.has_issuance() {
             let is_reissuance = txi.asset_issuance.asset_blinding_nonce != ZERO_TWEAK;
 
-            let asset_entropy = get_issuance_entropy(txi).expect("invalid issuance");
+            let asset_entropy =
+                get_issuance_entropy_in_tx(txi, &tx.output).expect("invalid issuance");
             let asset_id = AssetId::from_entropy(asset_entropy);
 
             let issued_amount = match txi.asset_issuance.amount {
@@ -399,7 +401,96 @@ pub fn lookup_asset(
     })
 }
 
-pub fn get_issuance_entropy(txin: &TxIn) -> Result<sha256::Midstate> {
+/// SEQUENTIA: the supervision declaration an issuance may carry.
+///
+/// A supervised asset is one whose issuer can freeze holders by consensus rule.
+/// Its freeze terms are committed INTO the asset id as a third merkle leaf, so
+/// deriving such an asset with the ordinary two-leaf formula yields an id that
+/// does not exist: the indexer files the issuance under a phantom asset and
+/// answers "asset not found" for the real one, which is what the explorer and
+/// the registry then report.
+///
+/// Script shape, from BuildSupervisionScript in the node
+/// (Sequentia src/supervision.cpp):
+///
+///   <"SEQSUP"> OP_DROP <asset:32> OP_DROP <descriptor:67> OP_DROP OP_RETURN
+///
+/// Note the trailing OP_RETURN: the output is unspendable in execution but is
+/// deliberately NOT prunable, because the node rebuilds its supervised-asset set
+/// from the UTXO set.
+const SUPERVISION_MARKER: &[u8; 6] = b"SEQSUP";
+const SUPERVISION_DESCRIPTOR_LEN: usize = 67;
+
+fn parse_supervision_declaration(script: &elements::Script) -> Option<(AssetId, Vec<u8>)> {
+    let b = script.as_bytes();
+    // 1+6 marker push, OP_DROP, 1+32 asset, OP_DROP, 1+67 descriptor, OP_DROP, OP_RETURN
+    let expected = 7 + 1 + 33 + 1 + 1 + SUPERVISION_DESCRIPTOR_LEN + 1 + 1;
+    if b.len() != expected {
+        return None;
+    }
+    if b[0] != 6 || &b[1..7] != SUPERVISION_MARKER {
+        return None;
+    }
+    if b[7] != 0x75 {
+        return None; // OP_DROP
+    }
+    if b[8] != 32 {
+        return None;
+    }
+    let mut asset_bytes = [0u8; 32];
+    asset_bytes.copy_from_slice(&b[9..41]);
+    if b[41] != 0x75 {
+        return None;
+    }
+    if b[42] != SUPERVISION_DESCRIPTOR_LEN as u8 {
+        return None;
+    }
+    let descriptor = b[43..43 + SUPERVISION_DESCRIPTOR_LEN].to_vec();
+    let rest = 43 + SUPERVISION_DESCRIPTOR_LEN;
+    if b[rest] != 0x75 || b[rest + 1] != 0x6a {
+        return None; // OP_DROP OP_RETURN
+    }
+    let asset = AssetId::from_slice(&asset_bytes).ok()?;
+    Some((asset, descriptor))
+}
+
+/// Entropy for a SUPERVISED issuance: E = FastMerkleRoot(H(I), H(C), H(D)).
+///
+/// The descriptor hash is a double SHA256 over the 67 canonical bytes, matching
+/// SerializeHash in the node, and unlike the contract hash which is a single one.
+fn supervised_asset_entropy(
+    prevout: elements::OutPoint,
+    contract_hash: ContractHash,
+    descriptor: &[u8],
+) -> sha256::Midstate {
+    let prevout_hash = {
+        let mut enc = sha256d::Hash::engine();
+        prevout.consensus_encode(&mut enc).unwrap();
+        sha256d::Hash::from_engine(enc)
+    };
+    let descriptor_hash = {
+        let mut enc = sha256d::Hash::engine();
+        enc.write_all(descriptor).unwrap();
+        sha256d::Hash::from_engine(enc)
+    };
+    elements::fast_merkle_root(&[
+        prevout_hash.to_byte_array(),
+        contract_hash.to_byte_array(),
+        descriptor_hash.to_byte_array(),
+    ])
+}
+
+/// As above, but able to see the transaction's outputs.
+///
+/// A supervised issuance carries its declaration in an output of its OWN
+/// transaction, so the derivation is only recoverable with the outputs in hand.
+/// The declaration names the asset it belongs to, and the supervised derivation
+/// is adopted only when it reproduces that asset, so a transaction carrying
+/// somebody else's declaration cannot mislabel an ordinary issuance.
+pub fn get_issuance_entropy_in_tx(
+    txin: &TxIn,
+    outputs: &[elements::TxOut],
+) -> Result<sha256::Midstate> {
     if !txin.has_issuance() {
         bail!("input has no issuance");
     }
@@ -409,7 +500,19 @@ pub fn get_issuance_entropy(txin: &TxIn) -> Result<sha256::Midstate> {
     Ok(if !is_reissuance {
         let contract_hash = ContractHash::from_slice(&txin.asset_issuance.asset_entropy)
             .chain_err(|| "invalid entropy (contract hash)")?;
-        AssetId::generate_asset_entropy(txin.previous_output, contract_hash)
+        let plain = AssetId::generate_asset_entropy(txin.previous_output, contract_hash);
+        let mut chosen = plain;
+        for out in outputs {
+            if let Some((declared, descriptor)) = parse_supervision_declaration(&out.script_pubkey) {
+                let supervised =
+                    supervised_asset_entropy(txin.previous_output, contract_hash, &descriptor);
+                if AssetId::from_entropy(supervised) == declared {
+                    chosen = supervised;
+                    break;
+                }
+            }
+        }
+        chosen
     } else {
         sha256::Midstate::from_slice(&txin.asset_issuance.asset_entropy)
             .chain_err(|| "invalid entropy (reissuance)")?
@@ -645,5 +748,105 @@ fn apply_pegged_asset_stats(
             // these history entries variants are never kept for native assets
             unreachable!();
         }
+    }
+}
+
+#[cfg(test)]
+mod supervision_tests {
+    use super::*;
+    use bitcoin::hex::FromHex;
+
+    fn unhex(s: &str) -> Vec<u8> {
+        Vec::<u8>::from_hex(s).unwrap()
+    }
+
+    // A vector produced by the node itself, from a supervised issuance of the
+    // shape a bridge uses (zero supply, one reissuance token, pause enabled).
+    // Pinned rather than synthesised, because the failure it guards against is
+    // silent: without the third leaf the indexer files the issuance under an id
+    // that does not exist and answers "asset not found" for the real one, which
+    // is what the explorer and the registry then report.
+    //
+    // A caution this cost an hour: the RPC prints `assetEntropy` for an initial
+    // issuance as the COMPUTED ENTROPY, not the contract hash it commits (see
+    // core_write.cpp). The contract hash here is zero, which is what the
+    // issuance actually committed.
+    const PREVOUT_TXID: &str = "a880955bd7d12d27b5bcc08cb2311ebb54fe9c2220d5063d884a5a9a8201b5a3";
+    const PREVOUT_VOUT: u32 = 0;
+    const ENTROPY: &str = "a421115d5271b0e801f66251c26d0a06792028cc4ac5cee6413a08cbfca30813";
+    const REAL_ASSET: &str = "4e66ab9e583c2be736a660e50698a080bcc7d9686dc5867eb3b1ec3043cc229c";
+    const DECLARATION_SPK: &str = "0653455153555075209c22cc4330ecb1b37e86c56d68d9c7bc80a09806e560a636e72b3c589eab664e7543010200798e203fd6088dc3fc1155b2a1c4eefa8757af9ea60e1140a7ea3ecc0b64507a6a5a15001e0532b7fcb5b8dc37163b316bd5ab545a2f0ae83a7b796f861c38f2756a";
+
+    fn declaration_script() -> elements::Script {
+        elements::Script::from(unhex(DECLARATION_SPK))
+    }
+
+    fn prevout() -> elements::OutPoint {
+        elements::OutPoint {
+            txid: PREVOUT_TXID.parse().unwrap(),
+            vout: PREVOUT_VOUT,
+        }
+    }
+
+    fn contract_hash() -> ContractHash {
+        ContractHash::from_slice(&[0u8; 32]).unwrap()
+    }
+
+    #[test]
+    fn parses_a_real_declaration() {
+        let (asset, descriptor) =
+            parse_supervision_declaration(&declaration_script()).expect("should parse");
+        assert_eq!(descriptor.len(), SUPERVISION_DESCRIPTOR_LEN);
+        // The declaration names the asset it governs.
+        assert_eq!(asset.to_string(), REAL_ASSET);
+        // version 1, then feature bits 0x0002 (pause) little-endian.
+        assert_eq!(descriptor[0], 1);
+        assert_eq!(u16::from_le_bytes([descriptor[1], descriptor[2]]), 2);
+    }
+
+    #[test]
+    fn derives_the_asset_the_chain_actually_created() {
+        let (declared, descriptor) =
+            parse_supervision_declaration(&declaration_script()).unwrap();
+        let entropy = supervised_asset_entropy(prevout(), contract_hash(), &descriptor);
+        assert_eq!(entropy.to_string(), ENTROPY);
+        assert_eq!(AssetId::from_entropy(entropy).to_string(), REAL_ASSET);
+        assert_eq!(AssetId::from_entropy(entropy), declared);
+    }
+
+    #[test]
+    fn the_plain_derivation_gives_a_different_asset() {
+        // The whole point: with only two leaves the indexer files this issuance
+        // under an id that exists nowhere on the chain.
+        let plain = AssetId::generate_asset_entropy(prevout(), contract_hash());
+        assert_ne!(AssetId::from_entropy(plain).to_string(), REAL_ASSET);
+    }
+
+    #[test]
+    fn ordinary_scripts_are_not_declarations() {
+        assert!(parse_supervision_declaration(&elements::Script::new()).is_none());
+        // Right length, wrong marker.
+        let mut bad = unhex(DECLARATION_SPK);
+        bad[1] = b'X';
+        assert!(parse_supervision_declaration(&elements::Script::from(bad)).is_none());
+        // Truncated.
+        let short = unhex(DECLARATION_SPK);
+        assert!(parse_supervision_declaration(&elements::Script::from(
+            short[..short.len() - 1].to_vec()
+        ))
+        .is_none());
+    }
+
+    #[test]
+    fn a_declaration_for_another_asset_is_ignored() {
+        // A transaction carrying somebody else's declaration must not relabel an
+        // ordinary issuance, so the supervised derivation is adopted only when it
+        // reproduces the asset the declaration names.
+        let mut foreign = unhex(DECLARATION_SPK);
+        foreign[9] ^= 0xff; // corrupt the declared asset id
+        let script = elements::Script::from(foreign);
+        let (declared, descriptor) = parse_supervision_declaration(&script).unwrap();
+        let entropy = supervised_asset_entropy(prevout(), contract_hash(), &descriptor);
+        assert_ne!(AssetId::from_entropy(entropy), declared);
     }
 }
