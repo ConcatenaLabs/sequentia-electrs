@@ -10,12 +10,16 @@ set -u
 cd "$(dirname "$0")/electrs"
 source ../env.sh
 
-NODE_DIR="${NODE_DIR:-/home/aejkohl/seq-testnet/node000}"
-RPC_ADDR="${RPC_ADDR:-127.0.0.1:18200}"
+NODE_DIR="${NODE_DIR:-$HOME/seq-testnet/node000}"
+RPC_ADDR="${RPC_ADDR:-127.0.0.1:18200}"   # the public box's custom rpcport; a stock chain=test node serves 18776
 HTTP_ADDR="${HTTP_ADDR:-127.0.0.1:3003}"
 ELECTRUM_ADDR="${ELECTRUM_ADDR:-127.0.0.1:51402}"
 DB_DIR="${DB_DIR:-/tmp/electrs-seq-db-sup}"
-COOKIE="${COOKIE:-seq:seq}"
+# RPC auth: set COOKIE=user:password only for a node configured with
+# rpcuser/rpcpassword. Unset, electrs reads the node's own cookie file
+# ($NODE_DIR/testnet3/.cookie), so no credential lives in this script.
+COOKIE_ARGS=()
+if [ -n "${COOKIE:-}" ]; then COOKIE_ARGS=(--cookie "$COOKIE"); fi
 BACKOFF="${BACKOFF:-10}"
 
 mkdir -p "$DB_DIR"
@@ -27,7 +31,7 @@ while true; do
     --network sequentiatest \
     --daemon-rpc-addr "$RPC_ADDR" \
     --daemon-dir "$NODE_DIR" \
-    --cookie "$COOKIE" \
+    ${COOKIE_ARGS[@]+"${COOKIE_ARGS[@]}"} \
     --db-dir "$DB_DIR" \
     --http-addr "$HTTP_ADDR" \
     --electrum-rpc-addr "$ELECTRUM_ADDR" \

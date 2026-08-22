@@ -7,7 +7,8 @@ live block explorer and public API at https://sequentiatestnet.com/.
 
 Sequentia is a Bitcoin sidechain for asset tokenization and decentralized
 exchange, built as a fork of Blockstream Elements 23.3.3. Everything here is
-**testnet software**; there is no mainnet.
+**testnet software**; no mainnet is running yet (the node's `sequentia` chain
+parameters are a placeholder).
 
 One codebase produces two indexer binaries:
 
@@ -20,7 +21,7 @@ One codebase produces two indexer binaries:
 
 | Repo | Role |
 |---|---|
-| [Sequentia](https://github.com/GracedEternalKingCabbageMan/Sequentia) | The Sequentia node (`elementsd` fork of Elements 23.3.3): consensus, anchoring, proof of stake, open fee market, plus the canonical protocol documentation in `doc/sequentia/`. This indexer reads blocks from that node. |
+| [Sequentia](https://github.com/GracedEternalKingCabbageMan/Sequentia) | The Sequentia node (`sequentiad`, a fork of Elements 23.3.3): consensus, anchoring, proof of stake, open fee market, plus the canonical protocol documentation in `doc/sequentia/`. This indexer reads blocks from that node. |
 | [sequentia-explorer](https://github.com/GracedEternalKingCabbageMan/sequentia-explorer) | Sequentia block explorer frontend (esplora fork); it consumes this indexer's REST API over HTTP. There is no build-time coupling between the two repos. |
 | `sequentia-electrs` (this repo) | The electrs fork: Rust indexer + Esplora REST API for Sequentia and its Bitcoin testnet4 parent chain. |
 
@@ -64,10 +65,6 @@ Known limitations:
 - The `finalized` block field is declared in the code but deliberately never
   set (the `/block` handler serves purely from the index and makes no RPC
   call); use `GET /sequentia/checkpoints` for finality.
-- The `SEQUENTIA_TESTNET_GENESIS` constant in `electrs/src/chain.rs` still
-  holds the pre-2026-07-05 genesis hash. It is only used for Electrum server
-  discovery, so indexing and the REST API are unaffected, but the constant is
-  stale relative to the live chain (genesis `ddd11d54...`).
 
 ## Layout
 
@@ -81,7 +78,7 @@ Known limitations:
   stay siblings at the repo root.
 - `anchor-decode-check/` - small standalone validator: decodes a captured
   Sequentia block header through `rust-elements` and asserts the parsed anchor
-  and recomputed block hash match what `elementsd` reported. Also contains
+  and recomputed block hash match what `sequentiad` reported. Also contains
   `blockdiag`, a helper that decodes a full block and each transaction
   individually to locate serialization misalignments.
 - `env.sh` - toolchain env used on hosts without root access: points bindgen
@@ -115,7 +112,7 @@ this; `run-electrs-testnet4.sh` expects the Bitcoin binary at
 
 ### Against a Sequentia node
 
-You need a running Sequentia node (`elementsd` from the
+You need a running Sequentia node (`sequentiad` from the
 [Sequentia](https://github.com/GracedEternalKingCabbageMan/Sequentia) repo) on
 `chain=test` with its RPC server enabled. Then:
 
@@ -123,7 +120,7 @@ You need a running Sequentia node (`elementsd` from the
 cd electrs
 ./target/debug/electrs \
   --network sequentiatest \
-  --daemon-rpc-addr 127.0.0.1:18200 \
+  --daemon-rpc-addr 127.0.0.1:18776 \
   --daemon-dir /path/to/sequentia-datadir \
   --cookie rpcuser:rpcpassword \
   --db-dir /path/to/electrs-db \
@@ -137,8 +134,12 @@ Notes:
 
 - `--network sequentiatest` selects the Sequentia testnet parameters
   (`electrs/src/chain.rs`).
-- `--cookie` takes `USER:PASSWORD` matching the node's `rpcuser`/`rpcpassword`
-  (or use `--cookie-file` to point at the node's `.cookie` file).
+- `--daemon-rpc-addr`: `18776` is the node's default `rpcport` on
+  `chain=test`; match whatever `-rpcport` your node runs with (the public
+  box uses a custom port).
+- `--cookie` takes `USER:PASSWORD` matching the node's `rpcuser`/`rpcpassword`.
+  Omit it and electrs reads the node's cookie file from
+  `<daemon-dir>/testnet3/.cookie` instead; there is no `--cookie-file` flag.
 - `--daemon-dir` is the node's data directory; `chain=test` stores blocks
   under its `testnet3/` subdirectory (handled automatically).
 - `--jsonrpc-import` fetches blocks over RPC instead of parsing the node's
@@ -154,8 +155,10 @@ curl 127.0.0.1:3003/sequentia/anchorstatus
 ```
 
 For an unattended deployment use `run-electrs-supervised.sh` (override
-`NODE_DIR`, `RPC_ADDR`, `HTTP_ADDR`, `ELECTRUM_ADDR`, `DB_DIR`, `COOKIE` via
-environment variables). It exists because upstream electrs hard-panics when a
+`NODE_DIR`, `RPC_ADDR`, `HTTP_ADDR`, `ELECTRUM_ADDR`, `DB_DIR` via environment
+variables; set `COOKIE=user:password` only if the node uses `rpcuser`/
+`rpcpassword`, otherwise the node's `.cookie` file under `NODE_DIR` is read).
+It exists because upstream electrs hard-panics when a
 block it is fetching is reorged away; the wrapper restarts electrs, reuses the
 DB across clean restarts, and wipes the DB only after a crash so a reorged or
 reset chain re-indexes cleanly.

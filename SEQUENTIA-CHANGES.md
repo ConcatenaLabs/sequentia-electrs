@@ -77,12 +77,10 @@ rust-elements 0.26.1 misparses Sequentia data:
 - `src/chain.rs`: adds `Network::SequentiaTestnet` (CLI name
   `sequentiatest`): p2p magic `0xe0ba01ef` (the node's `chain=test`
   `pchMessageStart`), `AddressParams::SEQUENTIA_TESTNET`, the chain's policy
-  asset as native asset, no pegged asset (Sequentia has no peg), and a
-  genesis-hash constant. Note: the `SEQUENTIA_TESTNET_GENESIS` constant still
-  holds the pre-2026-07-05 genesis (`c2a0a99b...`; the live chain since the
-  2026-07-05 re-genesis is `ddd11d54...`). It is only used for Electrum
-  server discovery (`src/electrum/server.rs`), so indexing and REST are
-  unaffected, but it should be updated.
+  asset as native asset, no pegged asset (Sequentia has no peg), and
+  `SEQUENTIA_TESTNET_GENESIS` = the 2026-07-05 re-genesis hash
+  `ddd11d54c87a2bd94400fd31ce05d8e1110bb4b78e7103f738342086fc4ea92e`, used
+  for Electrum server discovery (`src/electrum/server.rs`).
 - `src/config.rs`: default ports for `sequentiatest` (REST `3003`, Electrum
   RPC `51402`, monitoring `44424`) and the daemon block-directory mapping
   (`chain=test` stores blocks under the `testnet3/` datadir subdirectory).
@@ -155,7 +153,7 @@ endpoints with live examples.
 ## How the port was validated
 
 - `anchor-decode-check` passes against a real header: parsed anchor height
-  and hash, and the recomputed block hash, match `elementsd` exactly.
+  and hash, and the recomputed block hash, match `sequentiad` exactly.
 - `cargo test --features sequentia sequentia_cert` covers the certificate
   parser (including a shape that was also observed live on a real 51-member
   committee block on the pre-2026-07-05 chain).
