@@ -74,11 +74,8 @@ the registry and the web wallet both read the Sequentia one.
 
 - The `finalized` block field is declared but deliberately never set — the `/block` handler serves
   purely from the index and makes no RPC call. Use `GET /sequentia/checkpoints` for finality.
-- `SEQUENTIA_TESTNET_GENESIS` in `electrs/src/chain.rs` still holds the pre-2026-07-05 genesis hash.
-  It is used only for Electrum server discovery, so indexing and REST are unaffected, but it is
-  stale relative to the live chain.
 
-Both are recorded in `README.md`'s "Known limitations". If you fix one, update that list.
+It is recorded in `README.md`'s "Known limitations". If you fix it, update that list.
 
 ## Working in this repo
 
