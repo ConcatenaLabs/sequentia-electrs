@@ -5,13 +5,13 @@ indexer that serves the Esplora REST API (and an Electrum RPC server) for the Se
 and its Bitcoin testnet4 parent chain. It backs the live block explorer and public API.
 
 This repository was split out of
-[`sequentia-explorer`](https://github.com/GracedEternalKingCabbageMan/sequentia-explorer), which
+[`sequentia-explorer`](https://github.com/ConcatenaLabs/sequentia-explorer), which
 now holds only the frontend. The frontend consumes this indexer's REST API over HTTP; there is no
 build-time coupling between the two.
 
 `SEQUENTIA-CHANGES.md` is the authoritative, file-level list of what this fork changes versus both
 upstreams. Read it before touching the decoder. Node and consensus conventions live in the
-[`Sequentia`](https://github.com/GracedEternalKingCabbageMan/Sequentia) repo.
+[`Sequentia`](https://github.com/ConcatenaLabs/Sequentia) repo.
 
 ## Layout, and why it matters
 

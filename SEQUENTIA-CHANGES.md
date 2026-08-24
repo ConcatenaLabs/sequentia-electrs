@@ -26,7 +26,7 @@ rust-elements 0.26.1 misparses Sequentia data:
    `m_anchor_height` (u32) + `m_anchor_hash` (32 bytes) between the Elements
    `height` field and the signed-block proof
    (`src/primitives/block.h` in the
-   [Sequentia node](https://github.com/GracedEternalKingCabbageMan/Sequentia)):
+   [Sequentia node](https://github.com/ConcatenaLabs/Sequentia)):
 
    ```
    version, prev_blockhash, merkle_root, time,
