@@ -21,8 +21,8 @@ One codebase produces two indexer binaries:
 
 | Repo | Role |
 |---|---|
-| [Sequentia](https://github.com/GracedEternalKingCabbageMan/Sequentia) | The Sequentia node (`sequentiad`, a fork of Elements 23.3.3): consensus, anchoring, proof of stake, open fee market, plus the canonical protocol documentation in `doc/sequentia/`. This indexer reads blocks from that node. |
-| [sequentia-explorer](https://github.com/GracedEternalKingCabbageMan/sequentia-explorer) | Sequentia block explorer frontend (esplora fork); it consumes this indexer's REST API over HTTP. There is no build-time coupling between the two repos. |
+| [Sequentia](https://github.com/ConcatenaLabs/Sequentia) | The Sequentia node (`sequentiad`, a fork of Elements 23.3.3): consensus, anchoring, proof of stake, open fee market, plus the canonical protocol documentation in `doc/sequentia/`. This indexer reads blocks from that node. |
+| [sequentia-explorer](https://github.com/ConcatenaLabs/sequentia-explorer) | Sequentia block explorer frontend (esplora fork); it consumes this indexer's REST API over HTTP. There is no build-time coupling between the two repos. |
 | `sequentia-electrs` (this repo) | The electrs fork: Rust indexer + Esplora REST API for Sequentia and its Bitcoin testnet4 parent chain. |
 
 This repository was split out of `sequentia-explorer`, which now holds only the
@@ -113,7 +113,7 @@ this; `run-electrs-testnet4.sh` expects the Bitcoin binary at
 ### Against a Sequentia node
 
 You need a running Sequentia node (`sequentiad` from the
-[Sequentia](https://github.com/GracedEternalKingCabbageMan/Sequentia) repo) on
+[Sequentia](https://github.com/ConcatenaLabs/Sequentia) repo) on
 `chain=test` with its RPC server enabled. Then:
 
 ```sh
@@ -285,7 +285,7 @@ Upstream's own test suite and docs are under `electrs/` (see
   [SEQUENTIA-CHANGES.md](SEQUENTIA-CHANGES.md). Keep it updated when you touch
   the fork surface.
 - When the REST API surface changes, update the frontend in
-  [sequentia-explorer](https://github.com/GracedEternalKingCabbageMan/sequentia-explorer)
+  [sequentia-explorer](https://github.com/ConcatenaLabs/sequentia-explorer)
   to match.
 - Upstream documentation (`electrs/README.md`, `electrs/doc/usage.md`,
   `electrs/doc/schema.md`) is kept as-is; Sequentia specifics live in this
