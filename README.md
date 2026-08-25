@@ -25,9 +25,6 @@ One codebase produces two indexer binaries:
 | [sequentia-explorer](https://github.com/ConcatenaLabs/sequentia-explorer) | Sequentia block explorer frontend (esplora fork); it consumes this indexer's REST API over HTTP. There is no build-time coupling between the two repos. |
 | `sequentia-electrs` (this repo) | The electrs fork: Rust indexer + Esplora REST API for Sequentia and its Bitcoin testnet4 parent chain. |
 
-This repository was split out of `sequentia-explorer`, which now holds only the
-frontend.
-
 ## Live instances
 
 Both indexers run behind https://sequentiatestnet.com:
@@ -43,9 +40,7 @@ curl https://sequentiatestnet.com/api/sequentia/anchorstatus
 curl https://sequentiatestnet.com/testnet4/api/blocks/tip/height
 ```
 
-## Status
-
-Working today (verified against the live public testnet on 2026-07-08):
+## What it indexes
 
 - Full indexing of the Sequentia testnet (`chain=test`), including the two
   Sequentia serialization changes: the 36-byte Bitcoin anchor in every block
@@ -58,7 +53,7 @@ Working today (verified against the live public testnet on 2026-07-08):
 - Parent-chain indexing of Bitcoin testnet4 with the featureless binary
   (upstream electrs functionality).
 
-Known limitations:
+## Known limitations
 
 - Upstream electrs panics if a block it is fetching is reorged away;
   `run-electrs-supervised.sh` exists to restart it (see "Running").
@@ -189,8 +184,7 @@ The API is the standard
 [Esplora HTTP API](https://github.com/Blockstream/esplora/blob/master/API.md),
 including its Elements/Liquid extensions (every output carries an `asset` id,
 transactions expose `issuance` data on inputs, fees are explicit fee outputs).
-Everything below is Sequentia-specific and was verified against the live API
-on 2026-07-08.
+Everything below is Sequentia-specific.
 
 ### Block objects: `bitcoin_anchor`
 
