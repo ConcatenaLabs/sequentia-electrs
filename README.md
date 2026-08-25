@@ -5,8 +5,8 @@ the Rust indexer that serves the Esplora REST API (plus an Electrum RPC server)
 for the Sequentia sidechain and its Bitcoin testnet4 parent chain. It backs the
 live block explorer and public API at https://sequentiatestnet.com/.
 
-Sequentia is a Bitcoin sidechain for asset tokenization and decentralized
-exchange, built as a fork of Blockstream Elements 23.3.3. Everything here is
+Sequentia is a Bitcoin sidechain for asset tokenization and disintermediated
+exchanges, built as a fork of Blockstream Elements 23.3.3. Everything here is
 **testnet software**; no mainnet is running yet (the node's `sequentia` chain
 parameters are a placeholder).
 
