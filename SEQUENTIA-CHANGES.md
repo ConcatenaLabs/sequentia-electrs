@@ -68,6 +68,12 @@ rust-elements 0.26.1 misparses Sequentia data:
   opt-in, the reverse of Liquid.)
 - `src/pset/map/input.rs`: PSET has no denomination field, so conversion to
   `AssetIssuance` defaults `denomination` to 8 under the feature.
+- `src/block.rs` + `src/lib.rs`: `BITCOIN_ANCHOR`, a process-wide switch
+  (default on) that says whether headers carry the anchor: a Sequentia node
+  serializes it only when its chain sets `-con_bitcoin_anchor`, which every
+  public chain does and a regtest harness chain does not. Decoding reads the
+  anchor when the switch is on; encoding and the block hash write it when the
+  header has one.
 
 ## Changes in `electrs/`
 
@@ -107,6 +113,27 @@ rust-elements 0.26.1 misparses Sequentia data:
   any-asset chain a single native "value" cannot summarize a transaction and
   the fee is not necessarily paid in the policy asset (Sequentia's open fee
   market allows fees in any accepted asset).
+- `Cargo.toml`: the `sequentia` feature also pulls in `sequentia-contracts`
+  (pinned by commit; the contracts toolchain, which pins the SimplicityHL
+  compiler and holds the descriptor reader) and `ureq` (a plain-HTTP client for
+  the registry).
+- `src/config.rs`: `--contract-registry-url` and `--no-bitcoin-anchor` (which
+  clears `elements::BITCOIN_ANCHOR`). `src/bin/electrs.rs` starts the registry
+  reader.
+- `src/new_index/schema.rs`: `index_transaction` also writes the contract
+  index rows (`K{leaf id}{height}{txid}{vin}`), so they are undone and redone
+  with the block's other history rows.
+- `src/elements/contracts.rs`: the contract index, the template store kept in
+  step with the registry, the decoder (budget and cost, witness values named by
+  walking the compiled program beside the revealed one, terms and state, the
+  spending path, tapscript leaves matched against templates, successors found
+  by recomputing the output from a new state) and the API behind the routes
+  below. Its unit tests decode transactions recorded on regtest
+  (`tests/fixtures/contracts/`).
+- `src/rest.rs`: `GET /tx/:txid/contracts`, `GET /contracts/templates`,
+  `GET /contracts/:leaf_id/spends`, `GET /contracts/:leaf_id/instance/:params`.
+- `tests/regtest/contract_index_reorg.py`: the contract index across an
+  anchor-driven reorganisation, on a local parent and anchored chain.
 - `src/rest.rs`:
   - Block JSON gains `bitcoin_anchor: {height, hash}` (parsed from the
     header; a Bitcoin testnet4 block on the public testnet).

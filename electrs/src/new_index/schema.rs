@@ -1452,6 +1452,19 @@ fn index_transaction(
         rows.push(edge.into_row());
     }
 
+    // SEQUENTIA: index every taproot script-path spend by the leaf it reveals
+    //      K{leaf id}{height}{txid}{vin} → leaf version
+    // (elements/contracts.rs). Like the rows above, these are deleted when the
+    // block is reorganised away and written again for the block that replaces it.
+    #[cfg(feature = "sequentia")]
+    crate::elements::contracts::index_rows(
+        tx,
+        &txid[..],
+        confirmed_height,
+        |vin| previous_txos_map.get(&tx.input[vin].previous_output),
+        rows,
+    );
+
     // Index issued assets & native asset pegins/pegouts/burns
     #[cfg(feature = "liquid")]
     asset::index_confirmed_tx_assets(

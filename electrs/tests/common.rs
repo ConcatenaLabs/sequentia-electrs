@@ -117,6 +117,8 @@ impl TestRunner {
 
             #[cfg(feature = "liquid")]
             asset_db_path: None, // XXX
+            #[cfg(feature = "sequentia")]
+            contract_registry_url: None,
             #[cfg(feature = "liquid")]
             parent_network: bitcoin::Network::Regtest,
             db_block_cache_mb: 8,

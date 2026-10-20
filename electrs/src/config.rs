@@ -84,6 +84,10 @@ pub struct Config {
     pub parent_network: BNetwork,
     #[cfg(feature = "liquid")]
     pub asset_db_path: Option<PathBuf>,
+    /// SEQUENTIA: the registry whose verified contract templates name the
+    /// contract spends the API decodes.
+    #[cfg(feature = "sequentia")]
+    pub contract_registry_url: Option<String>,
 
     #[cfg(feature = "electrum-discovery")]
     pub electrum_public_hosts: Option<crate::electrum::ServerHosts>,
@@ -313,6 +317,21 @@ impl Config {
                     .takes_value(true),
             );
 
+        #[cfg(feature = "sequentia")]
+        let args = args.arg(
+            Arg::with_name("no_bitcoin_anchor")
+                .long("no-bitcoin-anchor")
+                .help("The chain's block headers carry no Bitcoin anchor: a local chain started without -con_bitcoin_anchor, such as a regtest harness chain. Every public Sequentia chain carries one."),
+        );
+
+        #[cfg(feature = "sequentia")]
+        let args = args.arg(
+            Arg::with_name("contract_registry_url")
+                .long("contract-registry-url")
+                .help("Base URL of a Sequentia registry (for example http://127.0.0.1:8090); its verified contract templates name the contract spends served at /tx/:txid/contracts and /contracts/")
+                .takes_value(true),
+        );
+
         #[cfg(feature = "electrum-discovery")]
         let args = args.arg(
                 Arg::with_name("electrum_public_hosts")
@@ -351,6 +370,12 @@ impl Config {
 
         #[cfg(feature = "liquid")]
         let asset_db_path = m.value_of("asset_db_path").map(PathBuf::from);
+        #[cfg(feature = "sequentia")]
+        let contract_registry_url = m.value_of("contract_registry_url").map(|s| s.to_string());
+        #[cfg(feature = "sequentia")]
+        if m.is_present("no_bitcoin_anchor") {
+            elements::BITCOIN_ANCHOR.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
 
         let default_daemon_port = match network_type {
             #[cfg(not(feature = "liquid"))]
@@ -552,6 +577,8 @@ impl Config {
             parent_network,
             #[cfg(feature = "liquid")]
             asset_db_path,
+            #[cfg(feature = "sequentia")]
+            contract_registry_url,
 
             #[cfg(feature = "electrum-discovery")]
             electrum_public_hosts,

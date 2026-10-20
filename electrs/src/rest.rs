@@ -30,6 +30,8 @@ use std::str::FromStr;
 use std::{fs, time};
 
 use electrs_macros::trace;
+#[cfg(feature = "sequentia")]
+use crate::elements::contracts;
 
 #[cfg(feature = "liquid")]
 use {
@@ -935,6 +937,18 @@ impl Handle {
 }
 
 #[trace]
+#[cfg(feature = "sequentia")]
+fn parse_leaf_id(s: &str) -> Result<[u8; 32], HttpError> {
+    contracts::unhex(s)
+        .filter(|b| b.len() == 32 && s.bytes().all(|c| !c.is_ascii_uppercase()))
+        .map(|b| {
+            let mut a = [0u8; 32];
+            a.copy_from_slice(&b);
+            a
+        })
+        .ok_or_else(|| HttpError::from("Invalid leaf id: 32 bytes, lowercase hex".to_string()))
+}
+
 fn handle_request(
     method: Method,
     uri: hyper::Uri,
@@ -1269,6 +1283,46 @@ fn handle_request(
                 .body(Full::new(body))
                 .unwrap())
         }
+        // SEQUENTIA: the contract inputs of a transaction, decoded, and the
+        // outputs that carry their contracts on (elements/contracts.rs).
+        #[cfg(feature = "sequentia")]
+        (&Method::GET, Some(&"tx"), Some(hash), Some(&"contracts"), None, None) => {
+            let hash = Txid::from_str(hash)?;
+            let j = contracts::api::tx_contracts(query, &hash)
+                .ok_or_else(|| HttpError::not_found("Transaction not found".to_string()))?;
+            let ttl = ttl_by_depth(query.get_tx_status(&hash).block_height, query);
+            json_response((*j).clone(), ttl.min(TTL_SHORT))
+        }
+        // SEQUENTIA: the contract templates this indexer names spends by.
+        #[cfg(feature = "sequentia")]
+        (&Method::GET, Some(&"contracts"), Some(&"templates"), None, None, None) => {
+            json_response(contracts::api::templates_json(), TTL_SHORT)
+        }
+        // SEQUENTIA: the spends of a revealed leaf (a Simplicity commitment
+        // root, or a tapscript leaf hash), from the contract index.
+        #[cfg(feature = "sequentia")]
+        (&Method::GET, Some(&"contracts"), Some(leaf), Some(&"spends"), None, None) => {
+            let leaf = parse_leaf_id(leaf)?;
+            let limit = query_params
+                .get("limit")
+                .and_then(|l| l.parse::<usize>().ok())
+                .unwrap_or(200)
+                .min(contracts::api::MAX_SPENDS);
+            json_response(contracts::api::spends_json(query, &leaf, limit), TTL_SHORT)
+        }
+        // SEQUENTIA: one contract instance, by its commitment root and its
+        // parameters: its spends in order, its state after each, its coins now.
+        #[cfg(feature = "sequentia")]
+        (&Method::GET, Some(&"contracts"), Some(leaf), Some(&"instance"), Some(key), None) => {
+            let leaf = parse_leaf_id(leaf)?;
+            if key.is_empty() || key.len() > 8192 || !key.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+                return Err(HttpError::from("Invalid instance parameters".to_string()));
+            }
+            let j = contracts::api::instance_json(query, &leaf, key)
+                .ok_or_else(|| HttpError::not_found("No spend of this instance is indexed".to_string()))?;
+            json_response(j, TTL_SHORT)
+        }
+
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"status"), None, None) => {
             let hash = Txid::from_str(hash)?;
             let status = query.get_tx_status(&hash);
