@@ -121,6 +121,12 @@ fn run_server(config: Arc<Config>, salt_rwlock: Arc<RwLock<String>>) -> Result<(
         asset_db
     });
 
+    // SEQUENTIA: contract templates, kept in step with the registry.
+    #[cfg(feature = "sequentia")]
+    if let Some(url) = &config.contract_registry_url {
+        electrs::elements::contracts::spawn_registry_sync(url.clone());
+    }
+
     let query = Arc::new(Query::new(
         Arc::clone(&chain),
         Arc::clone(&mempool),

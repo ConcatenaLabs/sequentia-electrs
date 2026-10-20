@@ -226,6 +226,14 @@ pub struct BlockHeader {
 }
 serde_struct_impl!(BlockHeader, version, prev_blockhash, merkle_root, time, height, ext, bitcoin_anchor);
 
+/// SEQUENTIA: whether headers carry the 36-byte Bitcoin anchor. A Sequentia
+/// node serializes it only when its chain sets `-con_bitcoin_anchor` (every
+/// public chain does); a local chain started without it, such as a regtest
+/// harness chain, has none. Read on decode; an encoded header writes its anchor
+/// exactly when it has one.
+#[cfg(feature = "sequentia")]
+pub static BITCOIN_ANCHOR: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
 impl BlockHeader {
     /// Return the block hash.
     pub fn block_hash(&self) -> BlockHash {
@@ -246,12 +254,12 @@ impl BlockHeader {
         #[cfg(feature = "sequentia")]
         {
             // SEQUENTIA: the Bitcoin anchor is committed in the block hash,
-            // immediately after the height (matching src/primitives/block.h).
-            let (anchor_height, anchor_hash) = self
-                .bitcoin_anchor
-                .expect("sequentia BlockHeader without bitcoin_anchor");
-            anchor_height.consensus_encode(&mut enc).unwrap();
-            anchor_hash.consensus_encode(&mut enc).unwrap();
+            // immediately after the height (matching src/primitives/block.h),
+            // on a chain that carries one (see BITCOIN_ANCHOR).
+            if let Some((anchor_height, anchor_hash)) = self.bitcoin_anchor {
+                anchor_height.consensus_encode(&mut enc).unwrap();
+                anchor_hash.consensus_encode(&mut enc).unwrap();
+            }
         }
         match self.ext {
             ExtData::Proof { ref challenge, .. } => {
@@ -331,11 +339,10 @@ impl Encodable for BlockHeader {
         #[cfg(feature = "sequentia")]
         {
             // SEQUENTIA: 36-byte Bitcoin anchor after the height, before the proof.
-            let (anchor_height, anchor_hash) = self
-                .bitcoin_anchor
-                .expect("sequentia BlockHeader without bitcoin_anchor");
-            len += anchor_height.consensus_encode(&mut s)?;
-            len += anchor_hash.consensus_encode(&mut s)?;
+            if let Some((anchor_height, anchor_hash)) = self.bitcoin_anchor {
+                len += anchor_height.consensus_encode(&mut s)?;
+                len += anchor_hash.consensus_encode(&mut s)?;
+            }
         }
         len += self.ext.consensus_encode(&mut s)?;
         Ok(len)
@@ -358,11 +365,13 @@ impl Decodable for BlockHeader {
         let time = Decodable::consensus_decode(&mut d)?;
         let height = Decodable::consensus_decode(&mut d)?;
         #[cfg(feature = "sequentia")]
-        let bitcoin_anchor = {
+        let bitcoin_anchor = if BITCOIN_ANCHOR.load(core::sync::atomic::Ordering::Relaxed) {
             // SEQUENTIA: 36-byte Bitcoin anchor (parent height + block hash).
             let anchor_height: u32 = Decodable::consensus_decode(&mut d)?;
             let anchor_hash: BlockHash = Decodable::consensus_decode(&mut d)?;
             Some((anchor_height, anchor_hash))
+        } else {
+            None
         };
         #[cfg(not(feature = "sequentia"))]
         let bitcoin_anchor: Option<(u32, BlockHash)> = None;

@@ -34,6 +34,9 @@ differences, and both are silent-corruption failures rather than clean errors:
 1. **A 36-byte Bitcoin anchor in the block header**, inserted between the Elements `height` field
    and the signed-block proof. The block hash commits to it (while still excluding the proof
    solution, as Elements already does). Get this wrong and every computed block hash is wrong.
+   The node writes it only on a chain with `-con_bitcoin_anchor` (every public chain); a local
+   harness chain has none, and electrs then runs with `--no-bitcoin-anchor`
+   (`elements::BITCOIN_ANCHOR`).
 2. **An extra denomination byte in `CAssetIssuance`**, present whenever an input carries an
    issuance — including the genesis policy-asset issuance, where stock rust-elements loses byte
    alignment.
@@ -69,6 +72,17 @@ There is no CI.
 
 The explorer proxies `/api` to the Sequentia indexer and `/testnet4/api` to the parent-chain one;
 the registry and the web wallet both read the Sequentia one.
+
+## Contracts
+
+`electrs/src/elements/contracts.rs` holds the contract index (rows `K{leaf id}{height}{txid}{vin}`,
+written in `index_transaction` so a reorg undoes them with everything else) and the decoder behind
+`/tx/:txid/contracts` and `/contracts/...`. Templates come from the registry
+(`--contract-registry-url`) and are compiled with the SimplicityHL compiler that
+`sequentia-contracts` pins; bump that dependency's commit together with the registry's pin, or a
+template's root stops matching. A spend is named only when the template and the values it reveals
+recompute the very script it spends: keep that check in front of anything new the decoder learns
+to read. The README's "Contracts" section is the API's documentation.
 
 ## Known sharp edges, already documented
 

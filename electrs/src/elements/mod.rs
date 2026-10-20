@@ -3,6 +3,8 @@ use elements::secp256k1_zkp::{PedersenCommitment, Tweak, ZERO_TWEAK};
 use elements::{issuance::ContractHash, AssetId, TxIn};
 
 pub mod asset;
+#[cfg(feature = "sequentia")]
+pub mod contracts;
 pub mod peg;
 mod registry;
 

@@ -19,7 +19,7 @@ liquid = ["elements"]
 # Pulls in the Elements path (liquid) and the vendored rust-elements `sequentia`
 # feature so block headers' Bitcoin-anchor field is parsed. Build/run with
 # `--features sequentia --network sequentiatest`.
-sequentia = ["liquid", "elements/sequentia"]
+sequentia = ["liquid", "elements/sequentia", "sequentia-contracts", "ureq"]
 electrum-discovery = ["electrum-client"]
 bench = []
 otlp-tracing = [
@@ -80,6 +80,11 @@ rand = "0.9.1"
 electrum-client = { version = "0.8", optional = true }
 zmq = "0.10.0"
 electrs_macros = { path = "electrs_macros", default-features = false }
+# SEQUENTIA: the contracts toolchain (its pinned SimplicityHL compiler and the
+# descriptor reader), to decode a Simplicity spend and name its witness values,
+# and a plain-HTTP client to read the templates the registry has verified.
+sequentia-contracts = { git = "https://github.com/ConcatenaLabs/sequentia-contracts", rev = "bc0ee3ea6948aae634fc279cab863aa5a9e52f5f", optional = true }
+ureq = { version = "3.1", default-features = false, features = ["json"], optional = true }
 
 [dev-dependencies]
 corepc-node = { version = "0.10", features = ["download", "29_0"] }

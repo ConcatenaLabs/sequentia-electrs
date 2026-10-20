@@ -5,7 +5,7 @@
 # (daemon.rs: "Block not found"). The shared testnet is being repeatedly reset /
 # reorged by another process, so electrs dies each time. This wrapper restarts it
 # with a fresh DB and a short backoff, so the explorer self-heals once the chain
-# settles. Override NODE/RPC/DB/HTTP via env.
+# settles. Override NODE/RPC/DB/HTTP (and CONTRACT_REGISTRY_URL) via env.
 set -u
 cd "$(dirname "$0")/electrs"
 source ../env.sh
@@ -21,6 +21,11 @@ DB_DIR="${DB_DIR:-/tmp/electrs-seq-db-sup}"
 COOKIE_ARGS=()
 if [ -n "${COOKIE:-}" ]; then COOKIE_ARGS=(--cookie "$COOKIE"); fi
 BACKOFF="${BACKOFF:-10}"
+# The registry whose verified contract templates name contract spends
+# (GET /tx/:txid/contracts and /contracts/...). Unset, spends are decoded
+# unnamed.
+REGISTRY_ARGS=()
+if [ -n "${CONTRACT_REGISTRY_URL:-}" ]; then REGISTRY_ARGS=(--contract-registry-url "$CONTRACT_REGISTRY_URL"); fi
 
 mkdir -p "$DB_DIR"
 n=0
@@ -32,6 +37,7 @@ while true; do
     --daemon-rpc-addr "$RPC_ADDR" \
     --daemon-dir "$NODE_DIR" \
     ${COOKIE_ARGS[@]+"${COOKIE_ARGS[@]}"} \
+    ${REGISTRY_ARGS[@]+"${REGISTRY_ARGS[@]}"} \
     --db-dir "$DB_DIR" \
     --http-addr "$HTTP_ADDR" \
     --electrum-rpc-addr "$ELECTRUM_ADDR" \
