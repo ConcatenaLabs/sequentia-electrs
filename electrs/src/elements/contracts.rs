@@ -1222,6 +1222,53 @@ mod tests {
         assert_eq!(parse_index_key(&k), Some((1234, [5u8; 32], 3)));
     }
 
+    #[test]
+    fn spends_page_through_every_row_once() {
+        use crate::chain::Txid;
+        use crate::new_index::db::{DBFlush, DB};
+        use elements::encode::{deserialize, serialize};
+        let dir = tempfile::tempdir().unwrap();
+        let db = DB::open_test(dir.path());
+        let leaf = [7u8; 32];
+        let other = [8u8; 32];
+        let txid = |n: u8| -> Txid { deserialize(&[n; 32]).unwrap() };
+        // Seven spends of the leaf over four heights, two inputs of one
+        // transaction among them, and a spend of another leaf between.
+        let spends: Vec<(u32, u8, u32)> = vec![(10, 1, 0), (10, 2, 0), (10, 2, 1), (11, 3, 0), (12, 4, 0), (12, 5, 0), (13, 6, 0)];
+        let mut rows = Vec::new();
+        for (h, t, v) in &spends {
+            rows.push(DBRow { key: index_key(&leaf, *h, &serialize(&txid(*t)), *v), value: vec![0xbe] });
+        }
+        rows.push(DBRow { key: index_key(&other, 11, &serialize(&txid(9)), 0), value: vec![0xbe] });
+        db.write_rows(rows, DBFlush::Enable);
+        // Height 11's block is not on the best chain.
+        let best = |_: &Txid, h: u32| h != 11;
+        for limit in 1..=8 {
+            let mut seen = Vec::new();
+            let mut after: Option<Vec<u8>> = None;
+            let mut pages = 0;
+            loop {
+                let (page, next) = api::confirmed_spends(&db, &leaf, after.as_deref(), limit, best);
+                assert!(page.len() <= limit);
+                seen.extend(page.into_iter().map(|(t, v, h)| (h.unwrap(), serialize(&t)[0], v)));
+                pages += 1;
+                match next {
+                    Some(c) => after = Some(api::parse_spend_cursor(&leaf, &c).unwrap()),
+                    None => break,
+                }
+                assert!(pages < 20);
+            }
+            let want: Vec<(u32, u8, u32)> = spends.iter().cloned().filter(|s| s.0 != 11).collect();
+            assert_eq!(seen, want, "limit {}", limit);
+        }
+        // A cursor names one spend, and does not read for another length.
+        let c = api::spend_cursor(12, &txid(4), 0);
+        assert_eq!(c.len(), 80);
+        assert_eq!(api::parse_spend_cursor(&leaf, &c), Some(index_key(&leaf, 12, &serialize(&txid(4)), 0)));
+        assert_eq!(api::parse_spend_cursor(&leaf, &c[..78]), None);
+        assert_eq!(api::parse_spend_cursor(&leaf, "zz"), None);
+    }
+
     // The templates of sequentia-contracts at the pinned commit, as the
     // registry holds them: the descriptor and each leaf's source with its
     // includes resolved.
@@ -1401,8 +1448,32 @@ pub mod api {
     use elements::encode::{deserialize, serialize};
     use std::sync::Mutex;
 
-    /// The most spends of one leaf an instance page reads.
-    pub const MAX_SPENDS: usize = 5000;
+    /// The most spends one page of `/contracts/:leaf_id/spends` answers.
+    pub const MAX_PAGE: usize = 1000;
+    /// The most spends of one leaf an instance page reads, a page at a time;
+    /// past it the answer says it is `truncated`.
+    pub const MAX_INSTANCE_SPENDS: usize = 100_000;
+
+    /// A position in a leaf's spends: the height, txid (internal byte order)
+    /// and input index of the last spend a page answered, as 80 hex digits.
+    pub fn spend_cursor(height: u32, txid: &Txid, vin: u32) -> String {
+        let mut b = Vec::with_capacity(40);
+        b.extend_from_slice(&height.to_be_bytes());
+        b.extend_from_slice(&serialize(txid));
+        b.extend_from_slice(&vin.to_be_bytes());
+        hex(&b)
+    }
+
+    /// The index key a cursor names, for `leaf_id`; None when it does not read.
+    pub fn parse_spend_cursor(leaf_id: &[u8; 32], cursor: &str) -> Option<Vec<u8>> {
+        let b = unhex(cursor)?;
+        if b.len() != 40 {
+            return None;
+        }
+        let height = u32::from_be_bytes(b[0..4].try_into().ok()?);
+        let vin = u32::from_be_bytes(b[36..40].try_into().ok()?);
+        Some(index_key(leaf_id, height, &b[4..36], vin))
+    }
 
     fn rules(query: &Query, height: Option<u32>) -> ChainRules {
         let genesis = query.chain().hash_by_height(0).map(|h| h.to_string());
@@ -1453,13 +1524,26 @@ pub mod api {
         Some(j)
     }
 
-    /// The spends of a leaf: confirmed ones from the index (best chain only),
-    /// oldest first, then those in the mempool.
-    pub fn leaf_spends(query: &Query, leaf_id: &[u8; 32], limit: usize) -> Vec<(Txid, u32, Option<u32>)> {
+    /// A page of a leaf's confirmed spends from the index, oldest first, after
+    /// the index key `after`, at most `limit` of those `on_best_chain` keeps;
+    /// with the cursor of the last row read when another row follows.
+    pub fn confirmed_spends(
+        db: &crate::new_index::db::DB,
+        leaf_id: &[u8; 32],
+        after: Option<&[u8]>,
+        limit: usize,
+        on_best_chain: impl Fn(&Txid, u32) -> bool,
+    ) -> (Vec<(Txid, u32, Option<u32>)>, Option<String>) {
         let mut out = Vec::new();
-        for row in query.chain().store().history_db().iter_scan(&index_prefix(leaf_id)) {
-            if out.len() >= limit {
-                break;
+        let prefix = index_prefix(leaf_id);
+        let rows = match after {
+            Some(k) => db.iter_scan_from(&prefix, k),
+            None => db.iter_scan(&prefix),
+        };
+        let mut last: Option<(u32, Txid, u32)> = None;
+        for row in rows {
+            if after.map_or(false, |k| row.key.as_slice() <= k) {
+                continue;
             }
             let (height, txid, vin) = match parse_index_key(&row.key) {
                 Some(x) => x,
@@ -1469,16 +1553,44 @@ pub mod api {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            // Only rows of blocks on the best chain (a reorganised block's rows
-            // are deleted; this also skips rows of a block being processed).
-            match query.chain().tx_confirming_block(&txid) {
-                Some(b) if b.height as u32 == height => out.push((txid, vin, Some(height))),
-                _ => (),
+            if out.len() >= limit {
+                return (out, last.map(|(h, t, v)| spend_cursor(h, &t, v)));
+            }
+            last = Some((height, txid, vin));
+            if on_best_chain(&txid, height) {
+                out.push((txid, vin, Some(height)));
             }
         }
+        (out, None)
+    }
+
+    /// A page of the spends of a leaf: confirmed ones from the index (best
+    /// chain only), oldest first, after the index key `after` when one is
+    /// given, at most `limit`; then, on the page that reaches the end of the
+    /// confirmed ones, those in the mempool. The cursor of the last spend
+    /// answered comes back when more confirmed spends may follow.
+    pub fn leaf_spends(
+        query: &Query,
+        leaf_id: &[u8; 32],
+        after: Option<&[u8]>,
+        limit: usize,
+    ) -> (Vec<(Txid, u32, Option<u32>)>, Option<String>) {
+        let chain = query.chain();
+        let (mut out, next) = confirmed_spends(chain.store().history_db(), leaf_id, after, limit, |txid, height| {
+            // Only rows of blocks on the best chain (a reorganised block's rows
+            // are deleted; this also skips rows of a block being processed).
+            matches!(chain.tx_confirming_block(txid), Some(b) if b.height as u32 == height)
+        });
+        if next.is_some() {
+            return (out, next);
+        }
+        // The mempool's spends all come on the last page, whatever its size,
+        // so a page that ends the confirmed ones never drops them; at most a
+        // page of them.
         let mempool = query.mempool();
+        let mut unconfirmed = 0;
         for txid in mempool.txids() {
-            if out.len() >= limit {
+            if unconfirmed >= MAX_PAGE {
                 break;
             }
             if let Some(tx) = mempool.lookup_txn(txid) {
@@ -1486,12 +1598,33 @@ pub mod api {
                     if let Some(l) = revealed_leaf(&i.witness.script_witness) {
                         if l.leaf_id() == *leaf_id {
                             out.push((*txid, vin as u32, None));
+                            unconfirmed += 1;
                         }
                     }
                 }
             }
         }
-        out
+        (out, None)
+    }
+
+    /// Every spend of a leaf, a page at a time, up to `max`; and whether more
+    /// were left unread.
+    fn all_leaf_spends(query: &Query, leaf_id: &[u8; 32], max: usize) -> (Vec<(Txid, u32, Option<u32>)>, bool) {
+        let mut all = Vec::new();
+        let mut after: Option<Vec<u8>> = None;
+        loop {
+            let room = max - all.len();
+            let (page, next) = leaf_spends(query, leaf_id, after.as_deref(), room.min(MAX_PAGE));
+            all.extend(page);
+            match next {
+                Some(c) if all.len() < max => after = parse_spend_cursor(leaf_id, &c),
+                Some(_) => return (all, true),
+                None => return (all, false),
+            }
+            if after.is_none() {
+                return (all, false);
+            }
+        }
     }
 
     fn output_json(tx: &Transaction, vout: usize) -> Json {
@@ -1504,10 +1637,10 @@ pub mod api {
         })
     }
 
-    /// `GET /contracts/:leaf_id/spends`: each spend, with what the decoder
-    /// read of it.
-    pub fn spends_json(query: &Query, leaf_id: &[u8; 32], limit: usize) -> Json {
-        let spends = leaf_spends(query, leaf_id, limit);
+    /// `GET /contracts/:leaf_id/spends`: a page of spends, each with what the
+    /// decoder read of it, and the cursor to read on from (`next`).
+    pub fn spends_json(query: &Query, leaf_id: &[u8; 32], after: Option<&[u8]>, limit: usize) -> Json {
+        let (spends, next) = leaf_spends(query, leaf_id, after, limit);
         let list: Vec<Json> = spends
             .iter()
             .map(|(txid, vin, _)| {
@@ -1530,7 +1663,7 @@ pub mod api {
             .get(leaf_id)
             .map(|v| v.iter().map(|(t, i)| template_json(t, &t.leaves[*i].name)).collect())
             .unwrap_or_default();
-        json!({ "leaf_id": hex(leaf_id), "templates": templates, "spends": list, "limit": limit })
+        json!({ "leaf_id": hex(leaf_id), "templates": templates, "spends": list, "limit": limit, "next": next })
     }
 
     /// `GET /contracts/:leaf_id/instance/:params`: one instance's spends in
@@ -1543,11 +1676,14 @@ pub mod api {
         let mut terms = Json::Null;
         let mut ids: Vec<[u8; 32]> = vec![*leaf_id];
         let mut spks: HashSet<String> = HashSet::new();
+        let mut truncated = false;
         let mut i = 0;
         while i < ids.len() {
             let id = ids[i];
             i += 1;
-            for (txid, vin, _) in leaf_spends(query, &id, MAX_SPENDS) {
+            let (spends, more) = all_leaf_spends(query, &id, MAX_INSTANCE_SPENDS);
+            truncated |= more;
+            for (txid, vin, _) in spends {
                 let d = match tx_contracts(query, &txid) {
                     Some(d) => d,
                     None => continue,
@@ -1701,6 +1837,7 @@ pub mod api {
             "terms": terms,
             "chains": chains,
             "current": current,
+            "truncated": truncated,
         }))
     }
 
