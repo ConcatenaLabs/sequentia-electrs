@@ -1307,8 +1307,15 @@ fn handle_request(
                 .get("limit")
                 .and_then(|l| l.parse::<usize>().ok())
                 .unwrap_or(200)
-                .min(contracts::api::MAX_SPENDS);
-            json_response(contracts::api::spends_json(query, &leaf, limit), TTL_SHORT)
+                .clamp(1, contracts::api::MAX_PAGE);
+            let after = match query_params.get("after") {
+                Some(c) => Some(
+                    contracts::api::parse_spend_cursor(&leaf, c)
+                        .ok_or_else(|| HttpError::from("Invalid cursor".to_string()))?,
+                ),
+                None => None,
+            };
+            json_response(contracts::api::spends_json(query, &leaf, after.as_deref(), limit), TTL_SHORT)
         }
         // SEQUENTIA: one contract instance, by its commitment root and its
         // parameters: its spends in order, its state after each, its coins now.

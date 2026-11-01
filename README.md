@@ -66,9 +66,10 @@ curl https://sequentiatestnet.com/testnet4/api/blocks/tip/height
 - The `finalized` block field is declared in the code but deliberately never
   set (the `/block` handler serves purely from the index and makes no RPC
   call); use `GET /sequentia/checkpoints` for finality.
-- A contract instance's page reads at most 5,000 spends of its commitment
-  root and decodes each one; a root shared by far more spends needs an index
-  by instance.
+- A contract instance's page reads every spend of its commitment root, a
+  page at a time, and decodes each one to find the instance's own, since a
+  spend's instance is known only once a template decodes it; past 100,000
+  spends of one root it stops and answers `truncated`.
 - The contract index is written as blocks are indexed: an index made before
   this indexer had it holds no contract rows for its older blocks, so an
   upgrade re-indexes from an empty database.
@@ -309,23 +310,28 @@ holds.
   `owned_outputs` (outputs `2k` and `2k+1` of input `k`). Unnamed:
   `witness_values` in the order the program reads them. `outputs` gives, for
   each output a successor, the input it continues and its state.
-- `GET /contracts/:leaf_id/spends?limit=N`: the spends of a root (or tapleaf
-  hash), confirmed ones oldest first, then the mempool's, each with its
-  `status`, `template`, `path`, `instance` and `state`; and the `templates`
-  that root sits in.
+- `GET /contracts/:leaf_id/spends?limit=N&after=C`: a page of the spends of
+  a root (or tapleaf hash), confirmed ones oldest first, then, on the page
+  that reaches their end, the mempool's, each with its `status`, `template`,
+  `path`, `instance` and `state`; and the `templates` that root sits in. A
+  page holds at most `limit` confirmed spends (default 200, at most 1,000).
+  `next` is the cursor of the page's last spend while more may follow, and
+  null on the last page; pass it as `after` to read on.
 - `GET /contracts/:leaf_id/instance/:params`: one instance, by its root and
   its parameters: `template`, `terms`, every spend as `chains` of coins (each
   spend's decoded `input`, the coin it spent, its `owned_outputs`, its
   `successors` with the state each holds and the spend of each), the spends of
-  the instance's tapscript leaves among them, and the `current` unspent coins
-  with their state.
+  the instance's tapscript leaves among them, the `current` unspent coins
+  with their state, and `truncated`, true when the root has more spends than
+  the page reads (see "Known limitations").
 - `GET /contracts/templates`: the templates held, with their Simplicity
   leaves' roots, and those refused.
 
 ```sh
 $ curl https://sequentiatestnet.com/api/contracts/<root>/spends
 {"leaf_id":"<root>","templates":[{"name":"sequentia/faucet-drip","version":1,...}],
- "spends":[{"txid":"...","vin":0,"path":"drip","instance":"...","status":{"confirmed":true,...}},...]}
+ "spends":[{"txid":"...","vin":0,"path":"drip","instance":"...","status":{"confirmed":true,...}},...],
+ "limit":200,"next":null}
 ```
 
 ### `GET /assets/registry`: on-chain asset list
