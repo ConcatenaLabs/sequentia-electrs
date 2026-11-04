@@ -64,9 +64,10 @@ There is no CI.
 ## Running
 
 - `run-electrs-supervised.sh` runs the Sequentia indexer under a restart-on-crash supervisor. That
-  is not defensive padding: upstream electrs panics if a block it is fetching is reorged away, and
-  Sequentia reorgs whenever Bitcoin reorgs. Fix crashes without assuming the supervisor can be
-  removed.
+  is not defensive padding: upstream electrs exits on some failures while following a reorg, and
+  Sequentia reorgs whenever Bitcoin reorgs. It restarts electrs on the same index, whose own reorg
+  handling undoes the rows of blocks that left the chain; never make it wipe the database. Fix
+  crashes without assuming the supervisor can be removed.
 - `run-electrs-testnet4.sh` runs the Bitcoin testnet4 parent-chain indexer, and expects the plain
   Bitcoin binary at `$ELECTRS_BTC_BIN`.
 
@@ -87,7 +88,11 @@ to read. The README's "Contracts" section is the API's documentation.
 ## Known sharp edges, already documented
 
 - The `finalized` block field is declared but deliberately never set — the `/block` handler serves
-  purely from the index and makes no RPC call. Use `GET /sequentia/checkpoints` for finality.
+  purely from the index and makes no RPC call. A block's certification and anchor depth are on
+  `/block/:hash/status`, a transaction's on its status; checkpoint finality on
+  `GET /sequentia/checkpoints`.
+- Never cache an answer that depends on the chain for long: a Sequentia block leaves the chain
+  whenever Bitcoin reorganises its anchor, at any depth (`ttl_by_depth` in `rest.rs`).
 
 It is recorded in `README.md`'s "Known limitations". If you fix it, update that list.
 

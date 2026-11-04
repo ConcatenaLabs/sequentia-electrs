@@ -909,6 +909,27 @@ impl Daemon {
         self.request("getanchorstatus", json!([]))
     }
 
+    // SEQUENTIA: a block's header as the node reports it (verbose), for the
+    // committee certification only the node can judge. Asked from a REST
+    // request, so it never waits for a node that is down: one reconnect
+    // attempt, then the error, and the caller answers without it.
+    #[cfg(feature = "sequentia")]
+    pub fn getblockheader_json_once(&self, blockhash: &BlockHash) -> Result<Value> {
+        let params = json!([blockhash, true]);
+        match self.handle_request("getblockheader", &params) {
+            Err(Error(ErrorKind::Connection(msg), _)) => {
+                {
+                    let mut conn = self.conn.lock().unwrap();
+                    *conn = conn
+                        .try_reconnect_once()
+                        .chain_err(|| format!("node unreachable: {}", msg))?;
+                }
+                self.handle_request("getblockheader", &params)
+            }
+            result => result,
+        }
+    }
+
     #[trace]
     pub fn broadcast_raw(&self, txhex: &str) -> Result<Txid> {
         let txid = self.request("sendrawtransaction", json!([txhex]))?;

@@ -1045,6 +1045,16 @@ impl ChainQuery {
         *self.store.indexed_headers.read().unwrap().tip()
     }
 
+    // SEQUENTIA: the Bitcoin anchor of an indexed block on the best chain
+    // (None for a block that is not, or a chain without anchors), and the
+    // newest block's, read from the in-memory headers.
+    #[cfg(feature = "sequentia")]
+    pub fn anchors(&self, hash: &BlockHash) -> (Option<(u32, BlockHash)>, Option<u32>) {
+        let headers = self.store.indexed_headers.read().unwrap();
+        let of = |h: &BlockHash| headers.header_by_blockhash(h).and_then(|e| e.header().bitcoin_anchor);
+        (of(hash), of(headers.tip()).map(|(height, _)| height))
+    }
+
     pub fn best_header(&self) -> HeaderEntry {
         let headers = self.store.indexed_headers.read().unwrap();
         headers

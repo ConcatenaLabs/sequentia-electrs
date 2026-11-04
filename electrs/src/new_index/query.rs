@@ -3,6 +3,8 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use crate::chain::{Network, OutPoint, Transaction, TxOut, Txid};
+#[cfg(feature = "sequentia")]
+use crate::chain::BlockHash;
 use crate::config::Config;
 use crate::daemon::{Daemon, SubmitPackageResult};
 use crate::errors::*;
@@ -33,6 +35,8 @@ pub struct Query {
     cached_relayfee: RwLock<Option<f64>>,
     #[cfg(feature = "liquid")]
     asset_db: Option<Arc<RwLock<AssetRegistry>>>,
+    #[cfg(feature = "sequentia")]
+    certifications: crate::elements::finality::CertificationCache,
 }
 
 impl Query {
@@ -198,6 +202,54 @@ impl Query {
         TransactionStatus::from(self.chain.tx_confirming_block(txid))
     }
 
+    // SEQUENTIA: the anchor and the certification of a block on the best
+    // chain (elements/finality.rs). The anchor comes from the index; the
+    // certification from the node, once per block. A node that cannot answer
+    // leaves the certification out rather than delaying the response.
+    #[cfg(feature = "sequentia")]
+    pub fn block_finality(
+        &self,
+        hash: &BlockHash,
+    ) -> (
+        Option<crate::elements::finality::AnchorStatus>,
+        Option<crate::elements::finality::Certification>,
+    ) {
+        use crate::elements::finality;
+        let (anchor, tip_anchor) = self.chain.anchors(hash);
+        let certification = match self.certifications.get(hash) {
+            Some(c) => c,
+            None => match self.daemon.getblockheader_json_once(hash) {
+                Ok(h) => {
+                    let c = finality::certification_from_header_json(&h);
+                    self.certifications.put(*hash, c.clone());
+                    c
+                }
+                Err(e) => {
+                    debug!("no certification for block {}: {}", hash, e);
+                    None
+                }
+            },
+        };
+        (finality::anchor_status(anchor, tip_anchor), certification)
+    }
+
+    // SEQUENTIA: a confirmed status with its block's anchor and certification.
+    #[cfg(feature = "sequentia")]
+    pub fn add_finality(&self, status: &mut TransactionStatus) {
+        if let (true, Some(hash)) = (status.confirmed, status.block_hash) {
+            let (anchor, certification) = self.block_finality(&hash);
+            status.bitcoin_anchor = anchor;
+            status.certification = certification;
+        }
+    }
+
+    #[cfg(feature = "sequentia")]
+    pub fn get_tx_status_with_finality(&self, txid: &Txid) -> TransactionStatus {
+        let mut status = self.get_tx_status(txid);
+        self.add_finality(&mut status);
+        status
+    }
+
     #[trace]
     pub fn get_mempool_tx_fee(&self, txid: &Txid) -> Option<u64> {
         self.mempool().get_tx_fee(txid)
@@ -279,6 +331,8 @@ impl Query {
             asset_db,
             cached_estimates: RwLock::new((HashMap::new(), None)),
             cached_relayfee: RwLock::new(None),
+            #[cfg(feature = "sequentia")]
+            certifications: crate::elements::finality::CertificationCache::new(),
         }
     }
 

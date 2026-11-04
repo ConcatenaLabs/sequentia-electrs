@@ -134,6 +134,25 @@ rust-elements 0.26.1 misparses Sequentia data:
   `GET /contracts/:leaf_id/spends`, `GET /contracts/:leaf_id/instance/:params`.
 - `tests/regtest/contract_index_reorg.py`: the contract index across an
   anchor-driven reorganisation, on a local parent and anchored chain.
+- `src/elements/finality.rs`, `src/util/transaction.rs`,
+  `src/new_index/query.rs`, `src/new_index/schema.rs`, `src/daemon.rs`: a
+  confirmed `TransactionStatus` gains `bitcoin_anchor {height, hash, depth}`
+  (from the indexed headers; depth counted against the newest block's anchor)
+  and `certification {certified, signers, quorum}` (the node's
+  `getblockheader` `poscertified`/`poscountersigs`/`posquorum`, asked once per
+  block with a single reconnect attempt so a request never waits for a node
+  that is down, kept once the quorum is known).
+- `src/rest.rs`: every transaction status the REST API returns carries them,
+  and `GET /block/:hash/status` does for a block on the best chain. A
+  transaction's `fee` is the amount in its fee output's asset, named in
+  `fee_asset` (`fees` lists each asset when there are several); upstream's
+  `fee` counts the policy asset only. `ttl_by_depth` never returns the
+  five-year TTL: a Sequentia block can leave the chain at any depth when
+  Bitcoin reorganises.
+- `tests/regtest/tx_finality_reorg.py`: statuses and fees on a proof-of-stake
+  anchored chain, a block below the quorum, two anchor-driven reorganisations
+  (one while electrs is killed, restarted on its index by
+  `run-electrs-supervised.sh`).
 - `src/rest.rs`:
   - Block JSON gains `bitcoin_anchor: {height, hash}` (parsed from the
     header; a Bitcoin testnet4 block on the public testnet).
@@ -175,7 +194,10 @@ endpoints with live examples.
   individually to locate where a decoder loses byte alignment (this is how
   the issuance denomination delta was found).
 - `run-electrs-supervised.sh` / `run-electrs-testnet4.sh` / `env.sh`: deploy
-  and toolchain helpers, described in the README.
+  and toolchain helpers, described in the README. The supervisor restarts
+  electrs on its index after any exit; upstream's own reorg handling
+  (`Indexer::update`, `Store::open`) undoes the rows of blocks that left the
+  chain.
 
 ## How the port was validated
 
