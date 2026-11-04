@@ -30,6 +30,15 @@ pub struct TransactionStatus {
     pub block_hash: Option<BlockHash>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_time: Option<u32>,
+
+    // SEQUENTIA: how final the block holding it is (elements/finality.rs).
+    // Filled in by the REST layer, which reads the index and the node.
+    #[cfg(feature = "sequentia")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bitcoin_anchor: Option<crate::elements::finality::AnchorStatus>,
+    #[cfg(feature = "sequentia")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub certification: Option<crate::elements::finality::Certification>,
 }
 
 impl From<Option<BlockId>> for TransactionStatus {
@@ -40,12 +49,20 @@ impl From<Option<BlockId>> for TransactionStatus {
                 block_height: Some(b.height as usize),
                 block_hash: Some(b.hash),
                 block_time: Some(b.time),
+                #[cfg(feature = "sequentia")]
+                bitcoin_anchor: None,
+                #[cfg(feature = "sequentia")]
+                certification: None,
             },
             None => TransactionStatus {
                 confirmed: false,
                 block_height: None,
                 block_hash: None,
                 block_time: None,
+                #[cfg(feature = "sequentia")]
+                bitcoin_anchor: None,
+                #[cfg(feature = "sequentia")]
+                certification: None,
             },
         }
     }

@@ -1,15 +1,25 @@
 #!/bin/bash
-# Supervise electrs against the (volatile) shared Sequentia testnet.
+# Supervise the Sequentia electrs: restart it whenever it exits.
 #
-# Blockstream's electrs hard-panics if a block it is fetching gets reorged away
-# (daemon.rs: "Block not found"). The shared testnet is being repeatedly reset /
-# reorged by another process, so electrs dies each time. This wrapper restarts it
-# with a fresh DB and a short backoff, so the explorer self-heals once the chain
-# settles. Override NODE/RPC/DB/HTTP (and CONTRACT_REGISTRY_URL) via env.
+# Sequentia reorganises whenever Bitcoin reorganises the block a Sequentia block
+# is anchored to, at any depth, and electrs exits on some failures while
+# following a reorganisation (a block that vanishes while it is being fetched,
+# an RPC error from a node that is restarting). Restarting is all it takes: the
+# index records which blocks it has fully indexed, so on start electrs walks
+# back from the node's best block to one it holds, undoes the rows of every
+# block that left the chain and indexes the new ones. The database is kept
+# across every restart, so the API serves its last state at once.
+#
+# Override NODE_DIR/RPC_ADDR/DB_DIR/HTTP_ADDR/ELECTRUM_ADDR (and
+# CONTRACT_REGISTRY_URL) via env; ELECTRS_BIN, NETWORK and ELECTRS_ARGS (extra
+# flags, split on spaces) point it at another binary or chain.
 set -u
 cd "$(dirname "$0")/electrs"
-source ../env.sh
+[ -f ../env.sh ] && source ../env.sh
 
+ELECTRS_BIN="${ELECTRS_BIN:-./target/debug/electrs}"
+NETWORK="${NETWORK:-sequentiatest}"
+read -r -a EXTRA_ARGS <<< "${ELECTRS_ARGS:-}"
 NODE_DIR="${NODE_DIR:-$HOME/seq-testnet/node000}"
 RPC_ADDR="${RPC_ADDR:-127.0.0.1:18200}"   # the public box's custom rpcport; a stock chain=test node serves 18776
 HTTP_ADDR="${HTTP_ADDR:-127.0.0.1:3003}"
@@ -32,8 +42,8 @@ n=0
 while true; do
   n=$((n+1))
   echo "[supervisor] start #$n -> $RPC_ADDR (db $DB_DIR)  $(date -u +%H:%M:%S)"
-  ./target/debug/electrs \
-    --network sequentiatest \
+  "$ELECTRS_BIN" \
+    --network "$NETWORK" \
     --daemon-rpc-addr "$RPC_ADDR" \
     --daemon-dir "$NODE_DIR" \
     ${COOKIE_ARGS[@]+"${COOKIE_ARGS[@]}"} \
@@ -42,18 +52,10 @@ while true; do
     --http-addr "$HTTP_ADDR" \
     --electrum-rpc-addr "$ELECTRUM_ADDR" \
     --cors '*' \
+    ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
     --jsonrpc-import -vv
   rc=$?
-  # The DB is REUSED across restarts so electrs serves its last-indexed state
-  # immediately (even while the node is briefly down). A non-zero exit means a
-  # panic — typically a reorg/wipe of the underlying chain left stale index
-  # state, so drop the DB and re-index cleanly on the next start.
-  if [ "$rc" -ne 0 ]; then
-    echo "[supervisor] electrs crashed (rc=$rc); wiping DB to recover from a chain reorg/reset"
-    rm -rf "$DB_DIR"; mkdir -p "$DB_DIR"
-  else
-    echo "[supervisor] electrs exited cleanly (rc=0)"
-  fi
+  echo "[supervisor] electrs exited (rc=$rc); its index in $DB_DIR is kept"
   echo "[supervisor] restarting in ${BACKOFF}s..."
   sleep "$BACKOFF"
 done

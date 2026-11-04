@@ -61,11 +61,15 @@ curl https://sequentiatestnet.com/testnet4/api/blocks/tip/height
 
 ## Known limitations
 
-- Upstream electrs panics if a block it is fetching is reorged away;
-  `run-electrs-supervised.sh` exists to restart it (see "Running").
+- Upstream electrs exits on some failures while following a reorganisation
+  (a block that vanishes while it is being fetched, an RPC error from a node
+  that is restarting); `run-electrs-supervised.sh` restarts it on the same
+  index (see "Running").
 - The `finalized` block field is declared in the code but deliberately never
   set (the `/block` handler serves purely from the index and makes no RPC
-  call); use `GET /sequentia/checkpoints` for finality.
+  call). A block's certification and anchor depth are on
+  `GET /block/:hash/status`, a transaction's on its `status`; checkpoint
+  finality is on `GET /sequentia/checkpoints`.
 - A contract instance's page reads every spend of its commitment root, a
   page at a time, and decodes each one to find the instance's own, since a
   spend's instance is known only once a template decodes it; past 100,000
@@ -175,10 +179,13 @@ For an unattended deployment use `run-electrs-supervised.sh` (override
 `NODE_DIR`, `RPC_ADDR`, `HTTP_ADDR`, `ELECTRUM_ADDR`, `DB_DIR` and
 `CONTRACT_REGISTRY_URL` via environment variables; set `COOKIE=user:password` only if the node uses `rpcuser`/
 `rpcpassword`, otherwise the node's `.cookie` file under `NODE_DIR` is read).
-It exists because upstream electrs hard-panics when a
-block it is fetching is reorged away; the wrapper restarts electrs, reuses the
-DB across clean restarts, and wipes the DB only after a crash so a reorged or
-reset chain re-indexes cleanly.
+`ELECTRS_BIN`, `NETWORK` and `ELECTRS_ARGS` (extra flags) point it at
+another binary or chain. It restarts electrs whenever it exits, on the same
+database: the index records which blocks it has fully indexed, so on start
+electrs walks back from the node's best block to one it holds, undoes the rows
+of every block that has left the chain and indexes the new ones. A crash
+during a reorganisation therefore costs a restart, never a re-index, and the
+API answers from its last state meanwhile.
 
 ### The Bitcoin testnet4 parent indexer
 
@@ -234,6 +241,44 @@ meaning "committee member `i` signed"; `signer_count` is its popcount.
 Legacy blocks whose solution embeds member records instead carry `members`
 (per member `secp_pubkey`/`vrf_proof`/`bls_pubkey`/`bls_pop`). Solutions
 that are neither (genesis, escaping-stall blocks) omit the field.
+
+### Transaction status: anchor and certification
+
+A Sequentia block that the staking committee has certified cannot be replaced
+by any competing Sequentia block, and it is still undone whenever Bitcoin
+reorganises away the block it is anchored to, however deep. Every confirmed
+transaction status (`GET /tx/:txid/status`, the `status` of a transaction in
+`/tx/:txid`, `/block/:hash/txs`, `/address/:address/txs` and the other
+listings, and of a spend in `/tx/:txid/outspend(s)`) and
+`GET /block/:hash/status` for a block on the best chain carry both:
+
+- `bitcoin_anchor`: `height` and `hash` of the Bitcoin block it is anchored
+  to, and `depth`, the Bitcoin blocks from that anchor up to the one the newest
+  Sequentia block is anchored to, both counted (the newest anchor is depth 1).
+- `certification`: `certified`, as the node judges it; `signers`, the
+  committee signatures the block carries; `quorum`, the signatures it needed,
+  when the node knows it. A block below the quorum (an escaping-stall block)
+  reads `certified: false`. electrs asks the node once per block; while the
+  node cannot answer, the field is left out.
+
+```sh
+$ curl https://sequentiatestnet.com/api/tx/<txid>/status
+{"confirmed":true,"block_height":7315,"block_hash":"...","block_time":1730000000,
+ "bitcoin_anchor":{"height":143437,"hash":"...","depth":3},
+ "certification":{"certified":true,"signers":12,"quorum":11}}
+```
+
+An unconfirmed status is `{"confirmed":false}`. Answers that depend on the
+chain are cached for 10 seconds only (`Cache-Control: max-age=10`): a depth
+grows, and a Bitcoin reorganisation can undo a block at any depth.
+
+### Transaction fee: `fee` and `fee_asset`
+
+Fees are paid in any accepted asset, so a transaction's `fee` is the amount
+in `fee_asset`, the asset of its fee output. A transaction paying fees in
+several assets (valid in a block, never relayed by the node) also carries
+`fees`, one `{asset, value}` per asset; `fee` and `fee_asset` are then the
+first.
 
 ### `GET /sequentia/checkpoints`
 

@@ -5,6 +5,8 @@ use elements::{issuance::ContractHash, AssetId, TxIn};
 pub mod asset;
 #[cfg(feature = "sequentia")]
 pub mod contracts;
+#[cfg(feature = "sequentia")]
+pub mod finality;
 pub mod peg;
 mod registry;
 

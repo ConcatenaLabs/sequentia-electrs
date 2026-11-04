@@ -7,6 +7,7 @@ use crate::errors;
 use crate::new_index::{compute_script_hash, Query, SpendingInput, Utxo};
 #[cfg(feature = "liquid")]
 use crate::util::optional_value_for_newer_blocks;
+#[cfg_attr(feature = "sequentia", allow(unused_imports))]
 use crate::util::{
     create_socket, electrum_merkle, extract_tx_prevouts, get_innerscripts, get_tx_fee, has_prevout,
     is_coinbase, BlockHeaderMeta, BlockId, FullHash, ScriptToAddr, ScriptToAsm, TransactionStatus,
@@ -66,6 +67,7 @@ const START_OF_LIQUID_DISCOUNT_CT_POLICY: u32 = 1734120000; // Friday, December 
 const TTL_LONG: u32 = 157_784_630; // ttl for static resources (5 years)
 const TTL_SHORT: u32 = 10; // ttl for volatie resources
 const TTL_MEMPOOL_RECENT: u32 = 5; // ttl for GET /mempool/recent
+#[cfg(not(feature = "sequentia"))]
 const CONF_FINAL: usize = 10; // reorgs deeper than this are considered unlikely
 
 #[derive(Serialize, Deserialize)]
@@ -399,6 +401,17 @@ struct TransactionValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<TransactionStatus>,
 
+    // SEQUENTIA: fees are paid in any accepted asset, so `fee` is the amount
+    // in `fee_asset`, the asset of the transaction's fee output. A block may
+    // hold a transaction paying fees in several assets (the node relays only
+    // one); `fees` then lists each, and `fee`/`fee_asset` are the first.
+    #[cfg(feature = "sequentia")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fee_asset: Option<AssetId>,
+    #[cfg(feature = "sequentia")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fees: Option<Vec<FeeValue>>,
+
     #[cfg(feature = "liquid")]
     #[serde(skip_serializing_if = "Option::is_none")]
     discount_vsize: Option<usize>,
@@ -436,7 +449,12 @@ impl TransactionValue {
             .map(|txout| TxOutValue::new(txout, config))
             .collect();
 
+        #[cfg(not(feature = "sequentia"))]
         let fee = get_tx_fee(&tx, &prevouts, config.network_type);
+        #[cfg(feature = "sequentia")]
+        let fees_by_asset = crate::elements::finality::fees_by_asset(&tx);
+        #[cfg(feature = "sequentia")]
+        let fee = fees_by_asset.first().map_or(0, |(_, v)| *v);
 
         let weight = tx.weight();
         #[cfg(not(feature = "liquid"))] // rust-bitcoin has a wrapper Weight type
@@ -456,6 +474,15 @@ impl TransactionValue {
             fee,
             status: Some(TransactionStatus::from(blockid)),
 
+            #[cfg(feature = "sequentia")]
+            fee_asset: fees_by_asset.first().map(|(a, _)| *a),
+            #[cfg(feature = "sequentia")]
+            fees: if fees_by_asset.len() > 1 {
+                Some(fees_by_asset.iter().map(|(asset, value)| FeeValue { asset: *asset, value: *value }).collect())
+            } else {
+                None
+            },
+
             #[cfg(feature = "liquid")]
             discount_vsize: optional_value_for_newer_blocks(
                 blockid,
@@ -471,6 +498,13 @@ impl TransactionValue {
             ),
         }
     }
+}
+
+#[cfg(feature = "sequentia")]
+#[derive(Serialize)]
+struct FeeValue {
+    asset: AssetId,
+    value: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -742,6 +776,17 @@ impl Default for SpendingValue {
     }
 }
 
+// SEQUENTIA: never long. A Sequentia block leaves the chain whenever Bitcoin
+// reorganises the block it is anchored to, whatever its depth here, and one
+// Bitcoin block spans many Sequentia blocks; a status also carries its anchor's
+// depth, which grows. So nothing whose answer depends on the chain is cached
+// for long; only what a hash fixes is (a block by its hash, its header).
+#[cfg(feature = "sequentia")]
+fn ttl_by_depth(_height: Option<usize>, _query: &Query) -> u32 {
+    TTL_SHORT
+}
+
+#[cfg(not(feature = "sequentia"))]
 fn ttl_by_depth(height: Option<usize>, query: &Query) -> u32 {
     height.map_or(TTL_SHORT, |height| {
         if query.chain().best_height() - height >= CONF_FINAL {
@@ -769,9 +814,19 @@ fn prepare_txs(
 
     let prevouts = query.lookup_txos(outpoints);
 
-    txs.into_iter()
+    #[cfg_attr(not(feature = "sequentia"), allow(unused_mut))]
+    let mut values: Vec<TransactionValue> = txs
+        .into_iter()
         .map(|(tx, blockid)| TransactionValue::new(tx, blockid, &prevouts, config))
-        .collect()
+        .collect();
+    // SEQUENTIA: each confirmed status with its block's anchor and certification.
+    #[cfg(feature = "sequentia")]
+    for v in values.iter_mut() {
+        if let Some(status) = v.status.as_mut() {
+            query.add_finality(status);
+        }
+    }
+    values
 }
 
 fn spawn_conn(
@@ -1027,6 +1082,20 @@ fn handle_request(
             let hash = BlockHash::from_str(hash)?;
             let status = query.chain().get_block_status(&hash);
             let ttl = ttl_by_depth(status.height, query);
+            // SEQUENTIA: a block on the best chain with its anchor and certification,
+            // as a transaction's status carries them.
+            #[cfg(feature = "sequentia")]
+            if status.in_best_chain {
+                let (anchor, certification) = query.block_finality(&hash);
+                let mut v = serde_json::to_value(&status)?;
+                if let Some(a) = anchor {
+                    v["bitcoin_anchor"] = serde_json::to_value(&a)?;
+                }
+                if let Some(c) = certification {
+                    v["certification"] = serde_json::to_value(&c)?;
+                }
+                return json_response(v, ttl);
+            }
             json_response(status, ttl)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txids"), None, None) => {
@@ -1332,7 +1401,10 @@ fn handle_request(
 
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"status"), None, None) => {
             let hash = Txid::from_str(hash)?;
+            #[cfg(not(feature = "sequentia"))]
             let status = query.get_tx_status(&hash);
+            #[cfg(feature = "sequentia")]
+            let status = query.get_tx_status_with_finality(&hash);
             let ttl = ttl_by_depth(status.block_height, query);
             json_response(status, ttl)
         }
@@ -1375,9 +1447,14 @@ fn handle_request(
                 txid: hash,
                 vout: index.parse::<u32>()?,
             };
-            let spend = query
+            #[cfg_attr(not(feature = "sequentia"), allow(unused_mut))]
+            let mut spend = query
                 .lookup_spend(&outpoint)
                 .map_or_else(SpendingValue::default, SpendingValue::from);
+            #[cfg(feature = "sequentia")]
+            if let Some(status) = spend.status.as_mut() {
+                query.add_finality(status);
+            }
             let ttl = ttl_by_depth(
                 spend
                     .status
@@ -1392,11 +1469,16 @@ fn handle_request(
             let tx = query
                 .lookup_txn(&hash)
                 .ok_or_else(|| HttpError::not_found("Transaction not found".to_string()))?;
-            let spends: Vec<SpendingValue> = query
+            #[cfg_attr(not(feature = "sequentia"), allow(unused_mut))]
+            let mut spends: Vec<SpendingValue> = query
                 .lookup_tx_spends(&tx)
                 .into_iter()
                 .map(|spend| spend.map_or_else(SpendingValue::default, SpendingValue::from))
                 .collect();
+            #[cfg(feature = "sequentia")]
+            for status in spends.iter_mut().filter_map(|s| s.status.as_mut()) {
+                query.add_finality(status);
+            }
             // @TODO long ttl if all outputs are either spent long ago or unspendable
             json_response(spends, TTL_SHORT)
         }
