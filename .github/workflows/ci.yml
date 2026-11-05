@@ -1,6 +1,6 @@
 # Upstream electrs' CI (electrs/.github/workflows/rust.yml, which GitHub does not read from a
 # subdirectory), run from the repository root on every pull request and on main, plus the
-# Sequentia build and the vendored rust-elements' own tests. Rust 1.92.0 is electrs'
+# Sequentia build and unit tests and the vendored rust-elements' own (upstream) suite. Rust 1.92.0 is electrs'
 # rust-toolchain.toml, which every build here, the server's included, follows.
 #
 # Not run here, by design:
@@ -85,6 +85,9 @@ jobs:
             rust-elements -> target
       - name: Unit tests (Sequentia mode)
         run: cargo test --features sequentia --lib --bins
-      - name: rust-elements tests (sequentia feature)
+      # Its suite is upstream's, on Elements vectors, which the `sequentia` decoding (an extra
+      # issuance byte, the anchor in the header) does not read; the Sequentia encoding is
+      # covered by the unit tests above on a real Sequentia block.
+      - name: rust-elements tests (upstream suite)
         working-directory: rust-elements
-        run: cargo test --features sequentia
+        run: cargo test
