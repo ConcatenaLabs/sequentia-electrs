@@ -59,7 +59,10 @@ cargo build                           # plain Bitcoin indexer, for the testnet4 
 **Both builds write to the same `target/debug/electrs`.** If you need both binaries, copy the first
 aside before building the second — the run scripts assume you have. Add `--release` for production.
 
-There is no CI.
+CI (`.github/workflows/ci.yml`) runs upstream electrs' jobs (check, the Bitcoin and Liquid
+test suites) from the repository root, the Sequentia-mode check and unit tests, and the vendored
+rust-elements' tests, on every pull request and on `main`. The regtest scripts in
+`electrs/tests/regtest/` need a Sequentia node checkout and are not run there.
 
 ## Running
 
