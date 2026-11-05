@@ -1,0 +1,93 @@
+# Upstream electrs' CI (electrs/.github/workflows/rust.yml, which GitHub does not read from a
+# subdirectory), run from the repository root on every pull request and on main, plus the
+# Sequentia build and unit tests and the vendored rust-elements' own (upstream) suite. Rust 1.92.0 is electrs'
+# rust-toolchain.toml, which every build here, the server's included, follows.
+#
+# Not run here, by design:
+# - SKIPPED (needs a Sequentia regtest from a node checkout): electrs/tests/regtest/*.py.
+#   The Rust integration tests (tests/electrum.rs, tests/rest.rs) start the stock bitcoind and
+#   elementsd they download, so they run in the Bitcoin and Liquid modes only; in Sequentia mode
+#   only the unit tests run.
+# - Upstream's nix job: this fork keeps electrs' flake.nix unchanged and builds with cargo.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+defaults:
+  run:
+    working-directory: electrs
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: electrs -> target
+      - name: cargo check --all-targets (Bitcoin)
+        run: cargo check --all-targets
+      - name: cargo check --all-targets --features sequentia
+        run: cargo check --all-targets --features sequentia
+
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - run: sudo apt-get update && sudo apt-get install libfuse2
+        working-directory: .
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: electrs -> target
+      - name: Run tests (Bitcoin mode, REST+Electrum)
+        run: RUST_LOG=debug cargo test
+
+  test-electrum-raw:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: electrs -> target
+      - name: Run test test_electrum_raw
+        run: RUST_LOG=debug cargo test -- --include-ignored test_electrum_raw
+
+  test-liquid:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: electrs -> target
+      - name: Run tests (Liquid mode, REST)
+        run: RUST_LOG=debug cargo test --features liquid
+
+  test-sequentia:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            electrs -> target
+            rust-elements -> target
+      - name: Unit tests (Sequentia mode)
+        run: cargo test --features sequentia --lib --bins
+      # Its suite is upstream's, on Elements vectors, which the `sequentia` decoding (an extra
+      # issuance byte, the anchor in the header) does not read; the Sequentia encoding is
+      # covered by the unit tests above on a real Sequentia block.
+      - name: rust-elements tests (upstream suite)
+        working-directory: rust-elements
+        run: cargo test

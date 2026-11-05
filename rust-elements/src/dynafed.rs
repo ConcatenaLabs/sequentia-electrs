@@ -723,6 +723,7 @@ mod tests {
             merkle_root: TxMerkleNode::all_zeros(),
             time: Default::default(),
             height: Default::default(),
+            bitcoin_anchor: None, // an Elements dynafed header carries no anchor
         };
         assert_eq!(
             header.calculate_dynafed_params_root().unwrap().to_hex(),
